@@ -2,18 +2,55 @@
 # -*- coding: utf-8 -*-
 
 import argparse
-from pathlib import Path
-from html import unescape
-from typing import List, Dict
 import csv
 import re
+from datetime import datetime
+from html import unescape
+from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple
+from xml.etree import ElementTree as ET
 
 try:
     from bs4 import BeautifulSoup  # pip install beautifulsoup4
 except ImportError:
     raise SystemExit("This script requires BeautifulSoup4. Install with: pip install beautifulsoup4")
 
+import requests
+
 BASE_URL = "https://zoek.officielebekendmakingen.nl/"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = REPO_ROOT / "data"
+DEFAULT_OUTPUT = DATA_DIR / "01_overheid_results.csv"
+DEFAULT_API_ENDPOINT = "https://repository.overheid.nl/sru"
+DEFAULT_API_QUERY = 'c.product-area==officielepublicaties AND cql.textAndIndexes="lbv"'
+REQUIRED_DOCUMENTSOORTS = {"provinciaal blad"}
+ALLOWED_RUBRIEKEN = {"andere beschikking", "andere vergunning", "omgevingsvergunning"}
+RUBRIEK_SUBSTRINGS = ("vergunning",)
+ISO_INPUT_FORMATS = [
+    "%Y-%m-%d",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S%z",
+    "%Y-%m-%dT%H:%M:%S.%f",
+    "%Y-%m-%dT%H:%M:%S.%f%z",
+]
+OUTPUT_FIELDNAMES = [
+    "Titel",
+    "Datum",
+    "URL",
+    "URL_PDF",
+    "Overheidslaag",
+    "Overheidsnaam",
+    "Documentsoort",
+    "Rubriek",
+]
+DATE_NORMALIZE_FORMATS = ["%d-%m-%Y", "%d/%m/%Y"]
+NS = {
+    "sru": "http://docs.oasis-open.org/ns/search-ws/sruResponse",
+    "gzd": "http://standaarden.overheid.nl/sru",
+    "dcterms": "http://purl.org/dc/terms/",
+    "overheid": "http://standaarden.overheid.nl/owms/terms/",
+    "overheidwetgeving": "http://standaarden.overheid.nl/wetgeving/",
+}
 
 def absolute_url(href: str, base: str = BASE_URL) -> str:
     if not href:
@@ -29,7 +66,7 @@ def gettext_trim(el) -> str:
 def parse_li(li) -> Dict[str, str]:
     """
     Parse a single <li> result block. Returns dict for CSV row.
-    Columns: Titel, Datum, URL, URL_PDF, Overheidslaag, Overheidsnaam, Zoekterm
+    Columns: Titel, Datum, URL, URL_PDF, Overheidslaag, Overheidsnaam, Documentsoort, Rubriek
     """
     # 1) Titel + URL (prefer the 'result--subtitle' anchor)
     a_sub = li.select_one('a.result--subtitle')
@@ -69,7 +106,6 @@ def parse_li(li) -> Dict[str, str]:
 
     # Leave these empty per request
     overheidslaag = ""
-    zoekterm = ""
 
     return {
         "Titel": titel,
@@ -78,7 +114,8 @@ def parse_li(li) -> Dict[str, str]:
         "URL_PDF": url_pdf,
         "Overheidslaag": overheidslaag,
         "Overheidsnaam": overheidsnaam,
-        "Zoekterm": zoekterm,
+        "Documentsoort": "",
+        "Rubriek": "",
     }
 
 def parse_file(html_path: Path) -> List[Dict[str, str]]:
@@ -95,42 +132,363 @@ def parse_file(html_path: Path) -> List[Dict[str, str]]:
             rows.append(row)
     return rows
 
-def main():
+
+def iso_to_dmy(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    try:
+        normalized = value.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
+        return dt.strftime("%d-%m-%Y")
+    except ValueError:
+        pass
+    for fmt in ISO_INPUT_FORMATS:
+        try:
+            dt = datetime.strptime(value, fmt)
+            return dt.strftime("%d-%m-%Y")
+        except ValueError:
+            continue
+    return ""
+
+
+def parse_any_date(value: str) -> Optional[datetime]:
+    value = (value or "").strip()
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        pass
+    for fmt in ISO_INPUT_FORMATS + DATE_NORMALIZE_FORMATS:
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def dmy_to_iso(value: str) -> Optional[str]:
+    dt = parse_any_date(value)
+    if not dt:
+        return None
+    return dt.strftime("%Y-%m-%d")
+
+
+def normalize_datum(value: str) -> str:
+    iso_value = dmy_to_iso(value)
+    if not iso_value:
+        return (value or "").strip()
+    return datetime.strptime(iso_value, "%Y-%m-%d").strftime("%d-%m-%Y")
+
+
+def normalized_key(datum: str, url: str) -> Tuple[str, str]:
+    return (normalize_datum(datum), (url or "").strip())
+
+
+def ensure_output_columns(row: Dict[str, str]) -> Dict[str, str]:
+    for field in OUTPUT_FIELDNAMES:
+        row.setdefault(field, "")
+    row["Datum"] = normalize_datum(row.get("Datum", ""))
+    return row
+
+
+def load_existing_rows(path: Path) -> Tuple[List[Dict[str, str]], Set[Tuple[str, str]], Optional[str]]:
+    if not path.exists():
+        return [], set(), None
+    rows: List[Dict[str, str]] = []
+    keys: Set[Tuple[str, str]] = set()
+    latest_iso: Optional[str] = None
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            ensured = ensure_output_columns({k: (v or "") for k, v in row.items()})
+            rows.append(ensured)
+            key = normalized_key(ensured.get("Datum", ""), ensured.get("URL", ""))
+            keys.add(key)
+            iso_value = dmy_to_iso(ensured.get("Datum", ""))
+            if iso_value and (latest_iso is None or iso_value > latest_iso):
+                latest_iso = iso_value
+    return rows, keys, latest_iso
+
+
+def augment_query_with_since(query: str, since_iso: str) -> str:
+    clause = f'dcterms.available>="{since_iso}"'
+    query = query.strip()
+    if not query:
+        return clause
+    return f"({query}) AND {clause}"
+
+
+def text_of(elem: Optional[ET.Element]) -> str:
+    if elem is None or elem.text is None:
+        return ""
+    return elem.text.strip()
+
+
+def parse_api_record(record: ET.Element) -> Optional[Dict[str, str]]:
+    data = record.find(".//sru:recordData", NS)
+    if data is None:
+        return None
+    title = text_of(data.find(".//dcterms:title", NS))
+    if not title:
+        return None
+
+    url_html = text_of(data.find(".//gzd:preferredUrl", NS))
+    if not url_html:
+        url_html = text_of(data.find(".//dcterms:hasVersion", NS))
+
+    url_pdf = ""
+    for item in data.findall(".//gzd:itemUrl", NS):
+        if item.get("manifestation") == "pdf":
+            url_pdf = text_of(item)
+            break
+
+    date_iso = text_of(data.find(".//dcterms:available", NS)) or text_of(
+        data.find(".//dcterms:modified", NS)
+    )
+    datum = iso_to_dmy(date_iso)
+
+    overheidslaag = text_of(data.find(".//overheidwetgeving:organisatietype", NS))
+    overheidsnaam = text_of(data.find(".//dcterms:publisher", NS)) or text_of(
+        data.find(".//dcterms:creator", NS)
+    )
+    documentsoort = text_of(data.find(".//overheidwetgeving:publicatienaam", NS))
+    rubriek = ""
+    for type_node in data.findall(".//dcterms:type", NS):
+        if (type_node.get("scheme") or "").strip() == "OVERHEIDop.Rubriek":
+            rubriek = text_of(type_node)
+            break
+
+    if not documentsoort or documentsoort.strip().lower() not in REQUIRED_DOCUMENTSOORTS:
+        return None
+    normalized_rubriek = rubriek.strip().lower()
+    if not normalized_rubriek:
+        return None
+    if normalized_rubriek not in ALLOWED_RUBRIEKEN and not any(
+        needle in normalized_rubriek for needle in RUBRIEK_SUBSTRINGS
+    ):
+        return None
+
+    return {
+        "Titel": title,
+        "Datum": datum,
+        "URL": url_html,
+        "URL_PDF": url_pdf,
+        "Overheidslaag": overheidslaag,
+        "Overheidsnaam": overheidsnaam,
+        "Documentsoort": documentsoort,
+        "Rubriek": rubriek,
+    }
+
+
+def fetch_api_rows(
+    endpoint: str, query: str, start: int, limit: int, chunk: int, timeout: int
+) -> List[Dict[str, str]]:
+    session = requests.Session()
+    rows: List[Dict[str, str]] = []
+    next_start = max(1, start)
+
+    while len(rows) < limit:
+        remaining = limit - len(rows)
+        page_size = min(max(1, chunk), remaining)
+        params = {
+            "operation": "searchRetrieve",
+            "version": "2.0",
+            "startRecord": str(next_start),
+            "maximumRecords": str(page_size),
+            "recordSchema": "http://standaarden.overheid.nl/sru/",
+            "query": query,
+        }
+        try:
+            resp = session.get(endpoint, params=params, timeout=timeout)
+        except requests.RequestException as exc:
+            raise SystemExit(f"[error] API request failed: {exc}") from exc
+        if resp.status_code != 200:
+            raise SystemExit(f"[error] API request failed HTTP {resp.status_code}: {resp.text[:200]}")
+        try:
+            root = ET.fromstring(resp.text)
+        except ET.ParseError as exc:
+            raise SystemExit(f"[error] Failed to parse API response: {exc}") from exc
+
+        record_nodes = root.findall(".//sru:record", NS)
+        if not record_nodes:
+            break
+
+        for node in record_nodes:
+            parsed = parse_api_record(node)
+            if parsed:
+                rows.append(parsed)
+                if len(rows) >= limit:
+                    break
+
+        next_pos = root.findtext(".//sru:nextRecordPosition", namespaces=NS, default="")
+        if not next_pos:
+            break
+        try:
+            next_start = int(next_pos)
+        except ValueError:
+            break
+        if next_start <= 0:
+            break
+
+    return rows
+
+def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
-        description="Extract Titel, Datum, URL, URL_PDF, Overheidslaag, Overheidsnaam, Zoekterm from overheid.nl result pages."
+        description="Extract Titel, Datum, URL, URL_PDF, Overheidslaag en Overheidsnaam uit lokale HTML of via de SRU API."
+    )
+    ap.add_argument(
+        "--mode",
+        choices=["local", "api"],
+        default=None,
+        help="Selecteer 'local' of 'api' als bron (laat weg voor interactieve keuze).",
     )
     ap.add_argument(
         "--files",
         nargs="+",
-        required=True,
-        help="HTML files to parse (e.g., drenthe.html gelderland_1.html gelderland_2.html gelderland_3.html)",
+        help="HTML-bestanden voor --mode local (bijv. drenthe.html gelderland_1.html).",
     )
-    ap.add_argument("--out", required=True, help="Output CSV path")
-    args = ap.parse_args()
+    ap.add_argument(
+        "--out",
+        default=str(DEFAULT_OUTPUT),
+        help=f"Uitvoer CSV (standaard: {DEFAULT_OUTPUT})",
+    )
+    ap.add_argument(
+        "--api-endpoint",
+        default=DEFAULT_API_ENDPOINT,
+        help="SRU API endpoint wanneer --mode api wordt gebruikt.",
+    )
+    ap.add_argument(
+        "--api-query",
+        default=DEFAULT_API_QUERY,
+        help="CQL zoekopdracht voor de SRU API (bijv. 'c.product-area==officielepublicaties AND cql.textAndIndexes=\"lbv\"').",
+    )
+    ap.add_argument("--api-start-record", type=int, default=1, help="Eerste record (1-based) om op te halen.")
+    ap.add_argument(
+        "--api-max-records",
+        type=int,
+        default=200,
+        help="Maximaal aantal records dat vanuit de API wordt opgehaald.",
+    )
+    ap.add_argument(
+        "--api-chunk-size",
+        type=int,
+        default=50,
+        help="Aantal records per API-request.",
+    )
+    ap.add_argument(
+        "--api-timeout",
+        type=int,
+        default=30,
+        help="HTTP-timeout in seconden voor API requests.",
+    )
+    ap.add_argument(
+        "--refresh-all",
+        action="store_true",
+        help="Overschrijf bestaande output en haal alle resultaten opnieuw op in plaats van alleen nieuwe toevoegingen.",
+    )
+    return ap.parse_args()
 
-    inputs = [Path(p).expanduser().resolve() for p in args.files]
-    for p in inputs:
-        if not p.exists():
-            raise SystemExit(f"Input not found: {p}")
 
-    all_rows: List[Dict[str, str]] = []
-    for p in inputs:
+def prompt_mode(default: str = "local") -> str:
+    while True:
         try:
-            all_rows.extend(parse_file(p))
-        except Exception as e:
-            print(f"[WARN] Failed to parse {p.name}: {e}")
+            choice = input(f"Kies modus (local/api) [{default}]: ").strip().lower()
+        except EOFError:
+            choice = ""
+        if not choice:
+            return default
+        if choice in ("local", "api"):
+            return choice
+        print("Voer 'local' of 'api' in aub.")
 
-    # Deduplicate exact duplicates (Titel, Datum, URL) across files
+
+def collect_rows(args: argparse.Namespace) -> List[Dict[str, str]]:
+    if args.mode == "local":
+        if not args.files:
+            raise SystemExit("Gebruik --files wanneer --mode local is geselecteerd.")
+        inputs = [Path(p).expanduser().resolve() for p in args.files]
+        for path in inputs:
+            if not path.exists():
+                raise SystemExit(f"Input niet gevonden: {path}")
+        rows: List[Dict[str, str]] = []
+        for path in inputs:
+            try:
+                rows.extend(parse_file(path))
+            except Exception as exc:
+                print(f"[WARN] Failed to parse {path.name}: {exc}")
+        return rows
+
+    print(
+        f"[info] API mode: endpoint={args.api_endpoint} query='{args.api_query}' "
+        f"(max {args.api_max_records}, chunk {args.api_chunk_size})"
+    )
+    return fetch_api_rows(
+        endpoint=args.api_endpoint,
+        query=args.api_query,
+        start=args.api_start_record,
+        limit=args.api_max_records,
+        chunk=args.api_chunk_size,
+        timeout=args.api_timeout,
+    )
+
+
+def main():
+    args = parse_args()
+    if not args.mode:
+        args.mode = prompt_mode()
+
+    out_path = Path(args.out).expanduser().resolve()
+    existing_rows: List[Dict[str, str]] = []
+    existing_keys: Set[Tuple[str, str]] = set()
+    latest_iso: Optional[str] = None
+
+    if not args.refresh_all:
+        existing_rows, existing_keys, latest_iso = load_existing_rows(out_path)
+        if existing_rows:
+            print(f"[info] Loaded {len(existing_rows)} bestaande regels uit {out_path}")
+
+    if args.mode == "api" and latest_iso and not args.refresh_all:
+        args.api_query = augment_query_with_since(args.api_query, latest_iso)
+        print(
+            f"[info] Alleen nieuwe resultaten ophalen vanaf {latest_iso}. Gebruik --refresh-all om alles opnieuw op te halen."
+        )
+
+    fetched_rows = collect_rows(args)
+    ensured_rows = [ensure_output_columns(r) for r in fetched_rows]
+
+    new_rows: List[Dict[str, str]] = []
+    for row in ensured_rows:
+        key = normalized_key(row.get("Datum", ""), row.get("URL", ""))
+        if key in existing_keys:
+            continue
+        existing_keys.add(key)
+        new_rows.append(row)
+
+    if existing_rows and not new_rows and not args.refresh_all:
+        print("[info] Geen nieuwe bekendmakingen gevonden; bestaande output blijft ongewijzigd.")
+        return
+
+    if existing_rows:
+        combined_rows = existing_rows + new_rows
+    else:
+        combined_rows = new_rows
+
+    if not combined_rows:
+        print("[warn] Geen resultaten gevonden.")
+        return
+
     seen = set()
     deduped: List[Dict[str, str]] = []
-    for r in all_rows:
+    for r in combined_rows:
         key = (r["Titel"], r["Datum"], r["URL"])
         if key in seen:
             continue
         seen.add(key)
         deduped.append(r)
 
-    # Sort by date (DD-MM-YYYY) desc, then Titel asc
     def date_key(dmy: str):
         m = re.match(r"^\s*(\d{1,2})-(\d{1,2})-(\d{4})\s*$", dmy)
         if not m:
@@ -140,17 +498,14 @@ def main():
 
     deduped.sort(key=lambda r: (date_key(r["Datum"]), r["Titel"]), reverse=True)
 
-    out_path = Path(args.out).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    fieldnames = ["Titel", "Datum", "URL", "URL_PDF", "Overheidslaag", "Overheidsnaam", "Zoekterm"]
     with out_path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w = csv.DictWriter(f, fieldnames=OUTPUT_FIELDNAMES)
         w.writeheader()
         for r in deduped:
             w.writerow(r)
 
-    print(f"Wrote {len(deduped)} rows → {out_path}")
+    print(f"Wrote {len(deduped)} rows → {out_path} (nieuwe records: {len(new_rows)})")
 
 if __name__ == "__main__":
     main()

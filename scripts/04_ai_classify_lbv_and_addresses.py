@@ -48,6 +48,7 @@ COL_ADDR_CONF = "ADDR_CONFIDENCE"
 COL_AI_SOURCE = "AI_SOURCE"
 
 COL_COMPANY_ID = "company_id"
+COL_COMPANY_NAME = "COMPANY_NAME"
 
 # =========================
 # Regex / Prescreen
@@ -74,6 +75,8 @@ KW_STAGE_DECIS = re.compile(
 )
 KW_STAGE_INTENT = re.compile(r"\bvoornemen[s]?\b|\bbeoogt\b|\bvoornemens\b", re.I)
 
+COMPANY_LINE_RE = re.compile(r"\bbedrijf\s*[:\-]\s*(.+)", re.I)
+
 # =========================
 # LLM Prompts
 # =========================
@@ -99,8 +102,10 @@ Je moet twee dingen doen:
    - Bepaal de procedurefase "stage":
        - "receipt_of_application"  → kennisgeving ontvangst/aanvraag ontvangen, vaak met tekst zoals
          "aanvraag ontvangen", "aanvraagdatum", "In dit stadium is het niet mogelijk uw mening te geven".
-       - "draft_decision"          → ontwerpbesluit / terinzagelegging / zienswijzen mogelijk.
-       - "definitive_decision"     → definitief besluit/beschikking, beroep/bezwaar mogelijk, inwerkingtreding, etc.
+       - "draft_decision"          → ontwerpbesluit / terinzagelegging / zienswijzen mogelijk (woorden zoals
+         "ontwerpbesluit", "ontwerpbeschikking", "zienswijzen indienen", "het voornemen hebben").
+       - "definitive_decision"     → definitief besluit/beschikking: vergunning wordt verleend of ingetrokken,
+         er kan beroep/bezwaar worden ingesteld, er staan zinnen als "Met dit besluit..." of "Het besluit treedt in werking".
        - "intent_notice"           → een bekendmaking van een voornemen, zonder dat er al een ontwerp- of definitief besluit ligt.
        - "other"                   → alles wat niet in bovenstaande categorieën past.
    - Let op:
@@ -109,6 +114,10 @@ Je moet twee dingen doen:
          In dat geval:
            - lbv_type = "LBV/LBV+" (want relevant dat de partij Lbv-deelnemer is),
            - maar is_withdrawal = false als er in deze publicatie geen vergunning wordt ingetrokken.
+       * Provinciale bekendmakingen beschrijven soms eerdere stappen (aanvragen of ontwerpbesluiten)
+         voordat ze "Met dit besluit..." melden dat de vergunning daadwerkelijk is verleend of ingetrokken.
+         Laat woorden als "vergunning verleend", "beroep instellen" en "het besluit treedt in werking"
+         zwaarder wegen dan historische context.
 
 2) Hoofdadres van de locatie bepalen:
    - Zoek het hoofd-adres van de locatie waar de vergunning of activiteit betrekking op heeft.
@@ -239,6 +248,27 @@ def combine_text_fields(html_text: str, pdf_text: str) -> str:
     if pdf_text.strip():
         parts.append(pdf_text.strip())
     return "\n\n---\n\n".join(parts)
+
+
+def extract_company_name(text: str) -> str:
+    if not text:
+        return ""
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        match = COMPANY_LINE_RE.match(line)
+        if match:
+            candidate = match.group(1)
+            candidate_lower = candidate.lower()
+            for stopper in ("locatie", "adres", "plaats", "activiteit", "aanvraagdatum", "dso-kenmerk", "zaaknummer"):
+                idx = candidate_lower.find(stopper)
+                if idx != -1:
+                    candidate = candidate[:idx]
+                    break
+            return candidate.strip(" :;-.,")
+    match = COMPANY_LINE_RE.search(text or "")
+    if match:
+        return match.group(1).strip(" :;-.,")
+    return ""
 
 
 def quick_prescreen(txt: str) -> Tuple[bool, Dict[str, bool]]:
@@ -444,6 +474,11 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = default
 
+    # Company name placeholder
+    if COL_COMPANY_NAME not in df.columns:
+        df[COL_COMPANY_NAME] = ""
+    else:
+        df[COL_COMPANY_NAME] = df[COL_COMPANY_NAME].fillna("").astype(str)
     return df
 
 
@@ -780,6 +815,13 @@ def main():
             df.at[idx, COL_LBV_CONF] = float(rb.get("lbv_confidence", 0.0) or 0.0)
             if not method_used:
                 method_used = "rules_only"
+
+        if COL_COMPANY_NAME in df.columns:
+            existing_company = str(df.at[idx, COL_COMPANY_NAME]).strip()
+            if not existing_company:
+                company_guess = extract_company_name(html) or extract_company_name(combined_text)
+                if company_guess:
+                    df.at[idx, COL_COMPANY_NAME] = company_guess
 
         df.at[idx, COL_LBV_METHOD] = method_used
 
