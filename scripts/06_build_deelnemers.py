@@ -1,5 +1,6 @@
 import pandas as pd
 from collections import defaultdict
+from pathlib import Path
 
 
 class UnionFind:
@@ -18,10 +19,14 @@ class UnionFind:
             self.parent[ry] = rx
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = REPO_ROOT / "data"
+
+
 def main():
     # ---------- 1. Load input ----------
-    infile = "Vergunningen_LBV_LBVplus.csv"
-    outfile = "Deelnemers_LBV_LBVplus.csv"
+    infile = DATA_DIR / "06_vergunningen_lbv_lbvplus.csv"
+    outfile = DATA_DIR / "06_deelnemers_lbv_lbvplus.csv"
 
     # Read as strings; we'll parse dates separately
     df = pd.read_csv(infile, dtype=str)

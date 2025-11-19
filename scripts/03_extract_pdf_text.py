@@ -15,9 +15,12 @@ import pandas as pd
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = REPO_ROOT / "data"
+
 # ================== Config ===================================
-IN_CSV        = "lbv_enriched.csv"
-OUT_CSV       = "lbv_enriched_with_pdf.csv"
+IN_CSV        = DATA_DIR / "02_lbv_enriched.csv"
+OUT_CSV       = DATA_DIR / "03_lbv_enriched_with_pdf.csv"
 
 COL_TEXT_PDF  = "TEXT_PDF"         # existing column (M)
 COL_PDF_PATH  = "LOCAL_PDF_PATH"   # existing column (N)

@@ -3,6 +3,7 @@ import os
 import re
 import time
 import json
+from pathlib import Path
 from typing import Dict, Any, Tuple, Optional
 
 import pandas as pd
@@ -16,11 +17,14 @@ load_dotenv()
 # Config / Paths / Columns
 # =========================
 
-IN_PATH = "lbv_enriched_with_pdf.csv"
-OUT_DIR = "."
-BASENAME_CSV = "lbv_enriched_with_ai_summary"
-BASENAME_TXT = "lbv_ai_summary"
-BASENAME_PDF = "lbv_ai_report"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = REPO_ROOT / "data"
+
+IN_PATH = DATA_DIR / "03_lbv_enriched_with_pdf.csv"
+OUT_DIR = DATA_DIR
+BASENAME_CSV = "04_lbv_enriched_with_ai_summary"
+BASENAME_TXT = "04_lbv_ai_summary"
+BASENAME_PDF = "04_lbv_ai_report"
 
 DEFAULT_MODEL = "gpt-4.1-mini"
 
@@ -190,21 +194,23 @@ Geef uitsluitend een JSON-object met exact deze structuur:
 # =========================
 
 def ensure_out_dir() -> None:
-    os.makedirs(OUT_DIR, exist_ok=True)
+    Path(OUT_DIR).mkdir(parents=True, exist_ok=True)
 
 
-def make_unique_path(base_dir: str, basename: str, ext: str) -> str:
+def make_unique_path(base_dir: os.PathLike[str] | str, basename: str, ext: str) -> str:
     """
     Maak een uniek pad in base_dir; voegt _1, _2, ... toe als bestand al bestaat.
     """
-    base_path = os.path.join(base_dir, f"{basename}.{ext}")
-    if not os.path.exists(base_path):
-        return base_path
+    base = Path(base_dir)
+    base.mkdir(parents=True, exist_ok=True)
+    candidate = base / f"{basename}.{ext}"
+    if not candidate.exists():
+        return str(candidate)
     i = 1
     while True:
-        candidate = os.path.join(base_dir, f"{basename}_{i}.{ext}")
-        if not os.path.exists(candidate):
-            return candidate
+        candidate = base / f"{basename}_{i}.{ext}"
+        if not candidate.exists():
+            return str(candidate)
         i += 1
 
 

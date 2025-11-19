@@ -4,11 +4,13 @@ Utilities for parsing overheid.nl publications, enriching them with local metada
 
 ## Repository structure
 
-- `1_parse_overheid_pages.py` – parse saved overheid.nl HTML into `overheid_parsed.csv`.
-- `3_extract_pdf_text.py` – fill `TEXT_PDF` by parsing local PDF downloads referenced in a CSV.
-- `4_ai_classify_lbv_and_addresses.py` – call OpenAI to classify LBV/LBV+ involvement, permit stage, withdrawals, and the main address.
-- `convert_permit_to_companies/6_build_deelnemers.py` – group permit docs into farm IDs and output `Deelnemers_LBV_LBVplus.csv`.
-- `lbv_*.csv`, `overheid_*.csv` – intermediate datasets produced along the pipeline.
+- `scripts/01_parse_overheid_pages.py` – parse saved overheid.nl HTML into `data/01_overheid_results.csv`.
+- `scripts/02_enrich_with_html_and_pdfs.py` – download PDFs/HTML, add `doc_id`, and write `data/02_lbv_enriched.csv`.
+- `scripts/03_extract_pdf_text.py` – fill `TEXT_PDF` for rows that have a local PDF (`data/03_lbv_enriched_with_pdf.csv`).
+- `scripts/04_ai_classify_lbv_and_addresses.py` – call OpenAI to add LBV/LBV+, withdrawal, stage, and address metadata (`data/04_lbv_enriched_with_ai_summary.csv`).
+- `scripts/05_enrich_addresses.py` – reserved for post-LLM address cleanup (currently a stub).
+- `scripts/06_build_deelnemers.py` – group permit rows into farm-level participants (`data/06_deelnemers_lbv_lbvplus.csv`).
+- `data/` – numbered CSV checkpoints so it is obvious which step produced each file (e.g., `02_lbv_enriched.csv` came from script 02).
 - `agents.md` – detailed prompt/agent documentation for the LLM steps.
 
 ## Setup
@@ -28,14 +30,21 @@ Utilities for parsing overheid.nl publications, enriching them with local metada
 ## Typical workflow
 
 1. **Parse overheid pages**  
-   `python 1_parse_overheid_pages.py --files provincie1.html provincie2.html --out overheid_parsed.csv`
-2. **Curate/enrich CSV** (outside this repo) to produce `lbv_enriched.csv`.
+   ```
+   python scripts/01_parse_overheid_pages.py --files provincie1.html provincie2.html --out data/01_overheid_results.csv
+   ```
+2. **Enrich with HTML/PDF context**  
+   ```
+   python scripts/02_enrich_with_html_and_pdfs.py --in data/01_overheid_results.csv --out data/02_lbv_enriched.csv
+   ```
 3. **Extract PDF text**  
-   Adjust constants in `3_extract_pdf_text.py` if needed and run `python 3_extract_pdf_text.py`.
+   Adjust constants in `scripts/03_extract_pdf_text.py` if needed and run `python scripts/03_extract_pdf_text.py` to produce `data/03_lbv_enriched_with_pdf.csv`.
 4. **LLM classification**  
-   Ensure `.env` exists, set `DEFAULT_MODEL` or basenames in `4_ai_classify_lbv_and_addresses.py`, then run it to produce `lbv_enriched_with_ai_summary.*`.
-5. **Aggregate participants**  
-   From `convert_permit_to_companies`, run `python 6_build_deelnemers.py` to produce `Deelnemers_LBV_LBVplus.csv`.
+   Ensure `.env` exists, set `DEFAULT_MODEL` or basenames in `scripts/04_ai_classify_lbv_and_addresses.py`, then run it to generate `data/04_lbv_enriched_with_ai_summary.*`.
+5. **(Optional) Address enrichment**  
+   Flesh out `scripts/05_enrich_addresses.py` if additional deterministic cleanup is needed.
+6. **Aggregate participants**  
+   `python scripts/06_build_deelnemers.py` reads `data/06_vergunningen_lbv_lbvplus.csv` (source permits) and writes `data/06_deelnemers_lbv_lbvplus.csv`.
 
 Intermediate CSVs are overwritten in place, so archive raw exports if you need reproducibility.
 
