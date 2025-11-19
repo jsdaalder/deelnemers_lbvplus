@@ -18,8 +18,9 @@ import re
 import sys
 import time
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 from urllib.parse import unquote, urlparse
 
 import pandas as pd
@@ -51,6 +52,24 @@ ENSURE_COLUMNS = {
     "Titel": ["Titel", "title", "subtitle_clean", "subtitle_raw"],
     "Datum": ["Datum", "publication_date", "publication_date_iso"],
 }
+FINAL_COLUMN_ORDER = [
+    "doc_id",
+    "Titel",
+    "Datum",
+    "URL_BEKENDMAKING",
+    "URL_PDF",
+    "Overheidslaag",
+    "Overheidsnaam",
+    "Documentsoort",
+    "Rubriek",
+    "LOCAL_PDF_PATH",
+    "TEXT_HTML",
+    "TEXT_PDF",
+    "URL",
+    "doc_id_old_style",
+]
+DATE_FORMATS = ["%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"]
+NEW_DOC_PATTERN = re.compile(r"^doc_(\d{5})$")
 
 HTML_STRIP_TAGS = ("script", "style", "nav", "header", "footer", "noscript", "iframe", "aside")
 
@@ -99,7 +118,7 @@ def ensure_standard_columns(df: pd.DataFrame) -> pd.DataFrame:
         else:
             df[target] = ""
     # Guarantee placeholder columns required downstream
-    for col in ("TEXT_HTML", "TEXT_PDF", "LOCAL_PDF_PATH", "HTML_STATUS", "HTML_TYPE", "PDF_STATUS", "PDF_TYPE"):
+    for col in ("TEXT_HTML", "TEXT_PDF", "LOCAL_PDF_PATH"):
         if col not in df.columns:
             df[col] = ""
         else:
@@ -107,27 +126,54 @@ def ensure_standard_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def ensure_doc_ids(df: pd.DataFrame) -> pd.DataFrame:
+def ensure_doc_ids(df: pd.DataFrame, existing: Optional[Sequence[str]] = None) -> pd.DataFrame:
     if "doc_id" not in df.columns:
         df["doc_id"] = ""
     df["doc_id"] = df["doc_id"].fillna("").astype(str)
+    if "doc_id_old_style" not in df.columns:
+        df["doc_id_old_style"] = ""
+    df["doc_id_old_style"] = df["doc_id_old_style"].fillna("").astype(str)
 
-    used = set()
-    counter = 1
-    resolved: list[str] = []
-    for raw in df["doc_id"]:
-        candidate = raw.strip()
-        if not candidate:
+    def collect_existing(values: Sequence[str]) -> Tuple[set, int]:
+        used_local = set()
+        max_num = 0
+        for value in values:
+            val = (value or "").strip()
+            match = NEW_DOC_PATTERN.match(val)
+            if match:
+                used_local.add(val)
+                max_num = max(max_num, int(match.group(1)))
+        return used_local, max_num
+
+    used_existing, max_existing_num = collect_existing(existing or [])
+    current_values = df["doc_id"].tolist()
+    used_current, max_current_num = collect_existing(current_values)
+    used = used_existing | used_current
+    counter = max(max_existing_num, max_current_num) + 1 if used else 1
+
+    def next_id() -> str:
+        nonlocal counter
+        while True:
             candidate = f"doc_{counter:05d}"
             counter += 1
-        base = candidate
-        suffix = 1
-        while candidate in used:
-            candidate = f"{base}_{suffix}"
-            suffix += 1
-        used.add(candidate)
-        resolved.append(candidate)
+            if candidate not in used:
+                used.add(candidate)
+                return candidate
+
+    resolved: list[str] = []
+    old_styles = df["doc_id_old_style"].tolist()
+    for idx, raw in enumerate(current_values):
+        candidate = (raw or "").strip()
+        if candidate and candidate in used and NEW_DOC_PATTERN.match(candidate):
+            resolved.append(candidate)
+            continue
+        if candidate and not old_styles[idx]:
+            old_styles[idx] = candidate
+        new_id = next_id()
+        resolved.append(new_id)
+
     df["doc_id"] = resolved
+    df["doc_id_old_style"] = old_styles
     return df
 
 
@@ -224,15 +270,11 @@ def enrich(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
         url_pdf = str(row.get("URL_PDF", "")).strip()
         local_path, pdf_status, pdf_type = download_pdf(url_pdf, doc_id, session, pdf_dir, args.delay)
         df.at[idx, "LOCAL_PDF_PATH"] = local_path
-        df.at[idx, "PDF_STATUS"] = pdf_status
-        df.at[idx, "PDF_TYPE"] = pdf_type
         pdf_counts[pdf_status] += 1
 
         url_html = str(row.get("URL_BEKENDMAKING", "") or row.get("URL", "")).strip()
         text_html, html_status, html_type = fetch_html(url_html, session, html_cache, args.delay, args.max_html_chars)
         df.at[idx, "TEXT_HTML"] = text_html
-        df.at[idx, "HTML_STATUS"] = html_status
-        df.at[idx, "HTML_TYPE"] = html_type
         html_counts[html_status] += 1
 
         # Ensure TEXT_PDF placeholder remains empty if missing
@@ -247,18 +289,103 @@ def enrich(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
     return df
 
 
+def normalize_date(value: str) -> str:
+    value = (value or "").strip()
+    for fmt in DATE_FORMATS:
+        try:
+            return datetime.strptime(value, fmt).strftime("%d-%m-%Y")
+        except ValueError:
+            continue
+    return value
+
+
+def canonical_url(row: Dict[str, str]) -> str:
+    url = row.get("URL_BEKENDMAKING") or row.get("URL") or ""
+    return url.strip()
+
+
+def row_key(row: Dict[str, str]) -> Tuple[str, str]:
+    return (normalize_date(row.get("Datum", "")), canonical_url(row))
+
+
+def merge_metadata(existing: Dict[str, str], fresh: Dict[str, str]) -> Dict[str, str]:
+    merged = existing.copy()
+    for field in (
+        "Titel",
+        "Datum",
+        "URL_BEKENDMAKING",
+        "URL_PDF",
+        "URL",
+        "Overheidslaag",
+        "Overheidsnaam",
+        "Documentsoort",
+        "Rubriek",
+    ):
+        if field in fresh:
+            merged[field] = fresh[field]
+    return merged
+
+
+def load_existing_output(path: Path) -> Tuple[List[Dict[str, str]], Dict[Tuple[str, str], Dict[str, str]], List[str]]:
+    if not path.exists():
+        return [], {}, []
+    df = pd.read_csv(path, dtype=str, keep_default_na=False)
+    df = ensure_standard_columns(df)
+    df = ensure_doc_ids(df)
+    records = df.to_dict("records")
+    lookup = {row_key(rec): rec for rec in records}
+    doc_ids = [rec.get("doc_id", "") for rec in records]
+    return records, lookup, doc_ids
+
+
 def main() -> None:
     args = parse_args()
     input_path = resolve_input_path(args.input_path)
     df = load_metadata(input_path)
     df = ensure_standard_columns(df)
-    df = ensure_doc_ids(df)
-
-    df = enrich(df, args)
-
     output_path = Path(args.output_path).expanduser().resolve()
-    df.to_csv(output_path, index=False)
-    print(f"[done] Wrote {len(df)} rows → {output_path}")
+    existing_records, existing_lookup, existing_doc_ids = load_existing_output(output_path)
+
+    metadata_records = df.to_dict("records")
+    indexed_results: Dict[int, Dict[str, str]] = {}
+    new_rows_with_index: List[Tuple[int, Dict[str, str]]] = []
+
+    for idx, record in enumerate(metadata_records):
+        key = row_key(record)
+        if key in existing_lookup:
+            indexed_results[idx] = merge_metadata(existing_lookup[key], record)
+        else:
+            new_rows_with_index.append((idx, record))
+
+    if new_rows_with_index:
+        new_df = pd.DataFrame([rec for _, rec in new_rows_with_index])
+        new_df = ensure_standard_columns(new_df)
+        new_df = ensure_doc_ids(new_df, existing_doc_ids)
+        new_df = enrich(new_df, args)
+        for (idx, _), row in zip(new_rows_with_index, new_df.to_dict("records")):
+            indexed_results[idx] = row
+            if row.get("doc_id"):
+                existing_doc_ids.append(row["doc_id"])
+    else:
+        print("[info] Geen nieuwe rijen om te verrijken; bestaand resultaat wordt hergebruikt.")
+
+    if not indexed_results:
+        print("[warn] Geen gegevens om te schrijven.")
+        return
+
+    ordered_rows = [indexed_results[i] for i in range(len(metadata_records))]
+    final_df = pd.DataFrame(ordered_rows)
+    final_df = ensure_standard_columns(final_df)
+    final_df = ensure_doc_ids(final_df)  # ensures column exists even if untouched
+    drop_cols = [c for c in ("Zoekterm", "PDF_STATUS", "PDF_TYPE", "HTML_STATUS", "HTML_TYPE") if c in final_df.columns]
+    if drop_cols:
+        final_df = final_df.drop(columns=drop_cols)
+    columns = [col for col in FINAL_COLUMN_ORDER if col in final_df.columns] + [
+        col for col in final_df.columns if col not in FINAL_COLUMN_ORDER
+    ]
+    final_df = final_df[columns]
+    final_df.to_csv(output_path, index=False)
+    print(f"[done] Wrote {len(final_df)} rows → {output_path}")
 
 
 if __name__ == "__main__":
