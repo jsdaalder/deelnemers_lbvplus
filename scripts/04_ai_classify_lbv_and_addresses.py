@@ -90,7 +90,9 @@ KW_STAGE_DECIS = re.compile(
 )
 KW_STAGE_INTENT = re.compile(r"\bvoornemen[s]?\b|\bbeoogt\b|\bvoornemens\b", re.I)
 
-COMPANY_LINE_RE = re.compile(r"\bbedrijf\s*[:\-]\s*(.+)", re.I)
+COMPANY_BRABANT_RE = re.compile(
+    r"bedrijf\s*[:\-]\s*(.*?)\s*locatie\s*[:\-]", re.I | re.S
+)
 
 # =========================
 # LLM Prompts
@@ -370,25 +372,23 @@ def combine_text_fields(html_text: str, pdf_text: str) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def row_is_noord_brabant(row: pd.Series) -> bool:
+    for col in ("Overheidsnaam", "Instantie", "Titel"):
+        value = row.get(col, "")
+        if isinstance(value, str) and "noord-brabant" in value.lower():
+            return True
+    return False
+
+
 def extract_company_name(text: str) -> str:
     if not text:
         return ""
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        match = COMPANY_LINE_RE.match(line)
-        if match:
-            candidate = match.group(1)
-            candidate_lower = candidate.lower()
-            for stopper in ("locatie", "adres", "plaats", "activiteit", "aanvraagdatum", "dso-kenmerk", "zaaknummer"):
-                idx = candidate_lower.find(stopper)
-                if idx != -1:
-                    candidate = candidate[:idx]
-                    break
-            return candidate.strip(" :;-.,")
-    match = COMPANY_LINE_RE.search(text or "")
-    if match:
-        return match.group(1).strip(" :;-.,")
-    return ""
+    match = COMPANY_BRABANT_RE.search(text)
+    if not match:
+        return ""
+    candidate = match.group(1)
+    candidate = re.sub(r"\s+", " ", candidate or "")
+    return candidate.strip(" :;-.,")
 
 
 def quick_prescreen(txt: str) -> Tuple[bool, Dict[str, bool]]:
@@ -885,10 +885,15 @@ def main():
 
         if COL_COMPANY_NAME in df.columns:
             existing_company = str(df.at[idx, COL_COMPANY_NAME]).strip()
-            if not existing_company:
-                company_guess = extract_company_name(html) or extract_company_name(combined_text)
-                if company_guess:
-                    df.at[idx, COL_COMPANY_NAME] = company_guess
+            is_brabant = row_is_noord_brabant(row)
+            if not is_brabant:
+                if existing_company:
+                    df.at[idx, COL_COMPANY_NAME] = ""
+            else:
+                if not existing_company:
+                    company_guess = extract_company_name(html) or extract_company_name(combined_text)
+                    if company_guess:
+                        df.at[idx, COL_COMPANY_NAME] = company_guess
 
         df.at[idx, COL_LBV_METHOD] = method_used
 
