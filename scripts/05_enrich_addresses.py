@@ -42,7 +42,11 @@ RANGE_RE = re.compile(r"^\s*(\d+)\s*[-–]\s*(\d+)\s*$")
 TM_RE = re.compile(r"^\s*(\d+)\s*t/m\s*(\d+)\s*$", re.IGNORECASE)
 POSTCODE_RE = re.compile(r"^\s*(\d{4})\s*([A-Za-z]{2})\s*$")
 
-PDOK_URL = "https://geodata.nationaalgeoregister.nl/locatieserver/v3/free"
+PDOK_ENDPOINTS = [
+    "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free",
+    "https://service.pdok.nl/bzk/locatieserver/search/v3_1/free",
+    "https://geodata.nationaalgeoregister.nl/locatieserver/v3/free",
+]
 PDOK_TIMEOUT = 10  # seconds
 
 
@@ -118,6 +122,7 @@ def format_house_for_query(number: str, suffix: str) -> str:
 class PdokClient:
     def __init__(self) -> None:
         self.cache: Dict[str, str] = {}
+        self.endpoints = PDOK_ENDPOINTS
 
     def lookup_postcode(self, street: str, number: str, suffix: str, place: str) -> str:
         key = self._cache_key(street, number, suffix, place)
@@ -129,15 +134,20 @@ class PdokClient:
         query_number = format_house_for_query(number, suffix)
         query = " ".join(part for part in [street, query_number, place] if part)
         params = {"q": query, "fq": "type:adres", "rows": 1}
-        try:
-            resp = requests.get(PDOK_URL, params=params, timeout=PDOK_TIMEOUT)
-            resp.raise_for_status()
-            data = resp.json()
-            docs = data.get("response", {}).get("docs", [])
-            postcode = docs[0].get("postcode", "") if docs else ""
-        except requests.RequestException as exc:  # pragma: no cover - network failures
-            print(f"[warn] PDOK lookup failed for '{query}': {exc}")
-            postcode = ""
+        headers = {"Accept": "application/json"}
+        postcode = ""
+        for endpoint in self.endpoints:
+            try:
+                resp = requests.get(endpoint, params=params, timeout=PDOK_TIMEOUT, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+                docs = data.get("response", {}).get("docs", [])
+                postcode = docs[0].get("postcode", "") if docs else ""
+                if postcode:
+                    break
+            except requests.RequestException as exc:  # pragma: no cover - network failures
+                print(f"[warn] PDOK lookup failed via {endpoint} for '{query}': {exc}")
+                continue
         normalized = normalize_postcode(postcode)
         self.cache[key] = normalized
         return normalized
