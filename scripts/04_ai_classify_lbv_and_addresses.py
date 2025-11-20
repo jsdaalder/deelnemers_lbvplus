@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import os
 import re
 import time
@@ -23,8 +24,6 @@ DATA_DIR = REPO_ROOT / "data"
 IN_PATH = DATA_DIR / "03_lbv_enriched_with_pdf.csv"
 OUT_DIR = DATA_DIR
 BASENAME_CSV = "04_lbv_enriched_with_ai_summary"
-BASENAME_TXT = "04_lbv_ai_summary"
-BASENAME_PDF = "04_lbv_ai_report"
 
 DEFAULT_MODEL = "gpt-4.1-mini"
 
@@ -49,6 +48,22 @@ COL_AI_SOURCE = "AI_SOURCE"
 
 COL_COMPANY_ID = "company_id"
 COL_COMPANY_NAME = "COMPANY_NAME"
+ANNOTATION_COLUMNS = [
+    COL_LBV_TYPE,
+    COL_WITHDRAWAL,
+    COL_STAGE,
+    COL_LBV_CONF,
+    COL_LBV_METHOD,
+    COL_AI_SOURCE,
+    COL_ADDR_STREET,
+    COL_ADDR_NR,
+    COL_ADDR_TOEV,
+    COL_ADDR_PC,
+    COL_ADDR_PLACE,
+    COL_ADDR_CONF,
+    COL_COMPANY_NAME,
+    COL_COMPANY_ID,
+]
 
 # =========================
 # Regex / Prescreen
@@ -197,6 +212,111 @@ Geef uitsluitend een JSON-object met exact deze structuur:
   "confidence": 0.0
 }}
 """
+
+
+# =========================
+# CLI helpers
+# =========================
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Classificeer LBV/LBV+ bekendmakingen met LLM of regels.")
+    parser.add_argument("--in", dest="input_path", default=str(IN_PATH), help="Input CSV (default: 03_lbv_enriched_with_pdf.csv).")
+    parser.add_argument(
+        "--existing-output",
+        dest="existing_output",
+        help="Bestaand 04-output CSV om eerdere resultaten over te nemen.",
+    )
+    parser.add_argument(
+        "--out-csv",
+        dest="out_csv",
+        help="Pad voor het CSV-resultaat. Standaard wordt een uniek bestand in data/ gemaakt.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["full", "addr", "rules"],
+        help="Verwerkingsmodus: full (LLM + regels), addr (alleen adres-LLM) of rules (alleen regels).",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximaal aantal rijen om te verwerken (standaard: allemaal).",
+    )
+    parser.add_argument(
+        "--only-unclassified",
+        action="store_true",
+        help="Alleen rijen waarbij LBV_TYPE nog leeg is verwerken.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Alle rijen opnieuw verwerken, ongeacht bestaande AI-resultaten.",
+    )
+    parser.add_argument(
+        "--model",
+        dest="model",
+        default=DEFAULT_MODEL,
+        help=f"OpenAI-modelnaam (standaard: {DEFAULT_MODEL}).",
+    )
+    parser.add_argument(
+        "--max-rows",
+        dest="max_rows",
+        type=int,
+        default=None,
+        help="Alias voor --limit voor achterwaartse compatibiliteit.",
+    )
+    return parser.parse_args()
+
+
+def resolve_output_path(user_value: Optional[str], basename: str, ext: str) -> Path:
+    if user_value:
+        return Path(user_value).expanduser().resolve()
+    return Path(make_unique_path(OUT_DIR, basename, ext)).expanduser().resolve()
+
+
+def load_existing_annotations(path: Optional[Path]) -> Dict[str, Dict[str, Any]]:
+    if not path or not path.exists():
+        return {}
+    df_prev = pd.read_csv(path)
+    df_prev = ensure_columns(df_prev)
+    df_prev = ensure_company_id(df_prev)
+    mapping: Dict[str, Dict[str, Any]] = {}
+    for _, row in df_prev.iterrows():
+        doc_id = str(row.get("doc_id", "")).strip()
+        alt_doc = str(row.get("doc_id_old_style", "")).strip()
+        keys = []
+        if doc_id:
+            keys.append(doc_id)
+        if alt_doc:
+            keys.append(alt_doc)
+        if not keys:
+            continue
+        row_dict = row.to_dict()
+        for key in keys:
+            mapping[key] = row_dict
+    if mapping:
+        print(f"[info] Overgenomen annotaties uit {path} ({len(mapping)} rijen).")
+    return mapping
+
+
+def apply_existing_annotations(df: pd.DataFrame, mapping: Dict[str, Dict[str, Any]]) -> pd.DataFrame:
+    if not mapping or "doc_id" not in df.columns:
+        return df
+    for idx, row in df.iterrows():
+        doc_id = str(row.get("doc_id", "")).strip()
+        alt_doc = str(row.get("doc_id_old_style", "")).strip() if "doc_id_old_style" in df.columns else ""
+        prev = None
+        if doc_id and doc_id in mapping:
+            prev = mapping[doc_id]
+        elif alt_doc and alt_doc in mapping:
+            prev = mapping[alt_doc]
+        if not prev:
+            continue
+        for col in ANNOTATION_COLUMNS:
+            if col in df.columns and col in prev:
+                df.at[idx, col] = prev.get(col, df.at[idx, col])
+    return df
+
 
 # =========================
 # Utility functions
@@ -543,80 +663,6 @@ def build_summary_from_dataframe(df: pd.DataFrame) -> Dict[str, Any]:
     return summary
 
 
-def write_text_summary(summary: Dict[str, Any], path: str) -> None:
-    lines = []
-    lines.append("Samenvatting Lbv/Lbv+ analyse")
-    lines.append("==============================")
-    lines.append(f"Totaal aantal rijen: {summary.get('total_rows', 0)}")
-    lines.append("")
-    lines.append("LBV_TYPE verdeling:")
-    for k, v in summary.get("lbv_type_counts", {}).items():
-        lines.append(f"  {k or '<leeg>'}: {v}")
-    lines.append("")
-    lines.append("WITHDRAWAL verdeling:")
-    for k, v in summary.get("withdrawal_counts", {}).items():
-        lines.append(f"  {k or '<leeg>'}: {v}")
-    lines.append("")
-    lines.append("STAGE verdeling:")
-    for k, v in summary.get("stage_counts", {}).items():
-        lines.append(f"  {k or '<leeg>'}: {v}")
-    lines.append("")
-    lines.append("AI_SOURCE verdeling (welke methode):")
-    for k, v in summary.get("ai_source_counts", {}).items():
-        lines.append(f"  {k or '<leeg>'}: {v}")
-    lines.append("")
-    lines.append("LBV_METHOD verdeling:")
-    for k, v in summary.get("lbv_method_counts", {}).items():
-        lines.append(f"  {k or '<leeg>'}: {v}")
-    lines.append("")
-    lines.append(f"Rijen met enig adres ingevuld: {summary.get('address_filled', 0)}")
-
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
-
-
-def _safe_latin1(s: str) -> str:
-    if not isinstance(s, str):
-        s = str(s)
-    return s.encode("latin-1", "replace").decode("latin-1")
-
-
-def write_pdf_report(summary: Dict[str, Any], path: str) -> None:
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, _safe_latin1("Lbv/Lbv+ analyse - samenvatting"), ln=True)
-
-    pdf.set_font("Arial", "", 12)
-    pdf.ln(5)
-    pdf.multi_cell(0, 8, _safe_latin1(f"Totaal aantal rijen: {summary.get('total_rows', 0)}"))
-    pdf.ln(3)
-
-    def write_section(title: str, counts: Dict[str, int]):
-        pdf.set_font("Arial", "B", 12)
-        pdf.cell(0, 8, _safe_latin1(title), ln=True)
-        pdf.set_font("Arial", "", 11)
-        for k, v in counts.items():
-            label = k if k not in ("", None) else "<leeg>"
-            pdf.cell(0, 6, _safe_latin1(f"- {label}: {v}"), ln=True)
-        pdf.ln(2)
-
-    write_section("LBV_TYPE verdeling", summary.get("lbv_type_counts", {}))
-    write_section("WITHDRAWAL verdeling", summary.get("withdrawal_counts", {}))
-    write_section("STAGE verdeling", summary.get("stage_counts", {}))
-    write_section("AI_SOURCE verdeling (welke methode)", summary.get("ai_source_counts", {}))
-    write_section("LBV_METHOD verdeling", summary.get("lbv_method_counts", {}))
-
-    pdf.ln(4)
-    pdf.set_font("Arial", "", 11)
-    pdf.multi_cell(
-        0,
-        6,
-        _safe_latin1(f"Rijen met enig adres ingevuld: {summary.get('address_filled', 0)}"),
-    )
-
-    pdf.output(path)
 
 
 # ================
@@ -664,39 +710,60 @@ def prompt_trial_or_all(total_rows: int) -> Optional[int]:
 # ================
 
 def main():
+    args = parse_args()
     ensure_out_dir()
 
-    if not os.path.exists(IN_PATH):
-        raise FileNotFoundError(f"Invoerbestand niet gevonden: {IN_PATH}")
+    input_path = Path(args.input_path).expanduser().resolve()
+    if not input_path.exists():
+        raise FileNotFoundError(f"Invoerbestand niet gevonden: {input_path}")
 
-    df = pd.read_csv(IN_PATH)
+    df = pd.read_csv(input_path)
     df = ensure_columns(df)
     df = ensure_company_id(df)
 
+    existing_path: Optional[Path] = Path(args.existing_output).expanduser().resolve() if args.existing_output else None
+    if existing_path is None and args.out_csv:
+        candidate = Path(args.out_csv).expanduser().resolve()
+        if candidate.exists():
+            existing_path = candidate
+    existing_map = load_existing_annotations(existing_path)
+    df = apply_existing_annotations(df, existing_map)
+
     total_rows = len(df)
+    limit = args.limit if args.limit is not None else args.max_rows
+    if limit is None:
+        limit = prompt_trial_or_all(total_rows)
 
-    mode = ask_llm_mode()
-    limit = prompt_trial_or_all(total_rows)
+    user_mode = args.mode
+    only_unclassified = args.only_unclassified
+    if user_mode is None:
+        mode_choice = ask_llm_mode()
+        if mode_choice == 2:
+            only_unclassified = True
+            user_mode = "full"
+        elif mode_choice == 3:
+            user_mode = "addr"
+        else:
+            user_mode = "full"
 
-    # Determine which indices to process
     indices = list(df.index)
-
     if limit is not None:
         indices = indices[: min(limit, len(indices))]
 
-    # Mode 2: only rows with empty LBV_TYPE
-    if mode == 2:
+    if only_unclassified:
         indices = [i for i in indices if not str(df.at[i, COL_LBV_TYPE]).strip()]
+    elif not args.force:
+        indices = [i for i in indices if not str(df.at[i, COL_AI_SOURCE]).strip()]
 
-    # If after filtering nothing remains:
     if not indices:
         print("[info] Geen rijen om te verwerken onder de huidige instellingen.")
-        out_csv = make_unique_path(OUT_DIR, BASENAME_CSV, "csv")
-        df.to_csv(out_csv, index=False, encoding="utf-8")
-        print(f"[ok] Geschreven CSV : {out_csv}")
+        out_csv_path = resolve_output_path(args.out_csv, BASENAME_CSV, "csv")
+        out_csv_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(out_csv_path, index=False, encoding="utf-8")
+        print(f"[ok] Geschreven CSV : {out_csv_path}")
         return
 
-    client = create_client()
+    client = None if user_mode == "rules" else create_client()
 
     target = len(indices)
     verbose_every = 1 if limit is not None else 10
@@ -718,9 +785,9 @@ def main():
                 print(f"[row {idx_pos}/{target}] (leeg) overgeslagen in {row_time:.2f}s")
             continue
 
-        if mode == 3:
+        if user_mode == "addr":
             # Only address
-            result_addr = run_llm_addr_only(client, combined_text)
+            result_addr = run_llm_addr_only(client, combined_text, model=args.model)
             if result_addr:
                 df.at[idx, COL_AI_SOURCE] = "llm_addr_only"
                 if not str(df.at[idx, COL_LBV_METHOD]).strip():
@@ -737,16 +804,16 @@ def main():
                 print(f"[row {idx_pos}/{target}] addr-only verwerkt in {row_time:.2f}s")
             continue
 
-        # mode 1 or 2: full LBV + address
+        # full LBV + address
         possibly, sig = quick_prescreen(combined_text)
         use_llm = False
-        if client is not None and possibly:
+        if client is not None and possibly and user_mode == "full":
             use_llm = True
 
         method_used = None
 
         if use_llm:
-            data = run_llm_full(client, combined_text)
+            data = run_llm_full(client, combined_text, model=args.model)
             llm_calls += 1
             if data:
                 method_used = "llm_full"
@@ -836,18 +903,11 @@ def main():
     df = postprocess_house_number_suffix(df)
 
     # Output files
-    out_csv = make_unique_path(OUT_DIR, BASENAME_CSV, "csv")
-    out_txt = make_unique_path(OUT_DIR, BASENAME_TXT, "txt")
-    out_pdf = make_unique_path(OUT_DIR, BASENAME_PDF, "pdf")
+    out_csv = resolve_output_path(args.out_csv, BASENAME_CSV, "csv")
 
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_csv, index=False, encoding="utf-8")
     print(f"[ok] Geschreven CSV : {out_csv}")
-
-    summary = build_summary_from_dataframe(df)
-    write_text_summary(summary, out_txt)
-    print(f"[ok] Geschreven TXT : {out_txt}")
-    write_pdf_report(summary, out_pdf)
-    print(f"[ok] Geschreven PDF : {out_pdf}")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ lbv_pipeline.py
 - Prints detailed diagnostics
 """
 
+import argparse
 import os
 import sys
 import math
@@ -19,8 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "data"
 
 # ================== Config ===================================
-IN_CSV        = DATA_DIR / "02_lbv_enriched.csv"
-OUT_CSV       = DATA_DIR / "03_lbv_enriched_with_pdf.csv"
+DEFAULT_IN_CSV = DATA_DIR / "02_lbv_enriched.csv"
+DEFAULT_OUT_CSV = DATA_DIR / "03_lbv_enriched_with_pdf.csv"
 
 COL_TEXT_PDF  = "TEXT_PDF"         # existing column (M)
 COL_PDF_PATH  = "LOCAL_PDF_PATH"   # existing column (N)
@@ -29,7 +30,6 @@ COL_TEXT_HTML = "TEXT_HTML"        # existing column (I) — used only for total
 MAX_WORKERS   = max(4, os.cpu_count() or 4)
 MAX_CHARS     = 1_000_000          # truncate extremely large outputs
 MAX_PAGES     = None               # None = all pages; optionally set an int (e.g., 50)
-FORCE_OVERWRITE = False            # True = re-extract even if TEXT_PDF has content
 # =============================================================
 
 # pip install pdfminer.six pandas
@@ -94,8 +94,23 @@ def _task(row_idx: int, pdf_path: Path):
         return (row_idx, "")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Extract TEXT_PDF from LOCAL_PDF_PATH for LBV pipeline rows.")
+    parser.add_argument("--in", dest="input_path", default=str(DEFAULT_IN_CSV), help="Input CSV path.")
+    parser.add_argument("--out", dest="output_path", default=str(DEFAULT_OUT_CSV), help="Output CSV path.")
+    parser.add_argument(
+        "--force",
+        dest="force",
+        action="store_true",
+        help="Re-extract PDF text even if TEXT_PDF already has content.",
+    )
+    return parser.parse_args()
+
+
 def main():
-    in_path = Path(IN_CSV).resolve()
+    args = parse_args()
+    in_path = Path(args.input_path).expanduser().resolve()
+    out_path = Path(args.output_path).expanduser().resolve()
     if not in_path.exists():
         print(f"Input not found: {in_path}", file=sys.stderr)
         sys.exit(1)
@@ -109,6 +124,9 @@ def main():
         print(f"Missing required column(s): {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
 
+    if COL_TEXT_PDF in df.columns:
+        df[COL_TEXT_PDF] = df[COL_TEXT_PDF].where(pd.notnull(df[COL_TEXT_PDF]), "").astype(object)
+
     # Build worklist: TEXT_PDF empty (or FORCE_OVERWRITE) AND local file path resolvable+exists
     eligible = []
     missing_path = []
@@ -116,7 +134,7 @@ def main():
 
     for i, row in df.iterrows():
         txt_pdf = row[COL_TEXT_PDF]
-        if not FORCE_OVERWRITE and not _is_empty(txt_pdf):
+        if not args.force and not _is_empty(txt_pdf):
             continue  # already filled
 
         raw_path = row[COL_PDF_PATH]
@@ -143,8 +161,9 @@ def main():
                 print(f"   row {i}: {p}")
         print(f"[summary] Written this run → TEXT_HTML: 0 | TEXT_PDF: 0")
         print(f"[summary] Totals after run → non-empty TEXT_HTML: {total_html_nonempty} | non-empty TEXT_PDF: {total_pdf_nonempty}")
-        df.to_csv(OUT_CSV, index=False, encoding="utf-8")
-        print(f"[ok] Wrote: {OUT_CSV}")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(out_path, index=False, encoding="utf-8")
+        print(f"[ok] Wrote: {out_path}")
         return
 
     print(f"[info] Extracting text from {len(eligible)} PDF(s) with up to {MAX_WORKERS} worker(s)...")
@@ -167,7 +186,8 @@ def main():
                 print(f"[info] {completed}/{len(eligible)} done...")
 
     # Persist
-    df.to_csv(OUT_CSV, index=False, encoding="utf-8")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_path, index=False, encoding="utf-8")
 
     # Totals after run
     total_html_nonempty = int(df[COL_TEXT_HTML].apply(lambda v: not _is_empty(v)).sum())
@@ -183,7 +203,7 @@ def main():
     print(f"[diag] Parsed but empty text (likely scan/encrypted): {empty_after_parse}")
     print(f"[summary] Written this run → TEXT_HTML: 0 | TEXT_PDF: {pdf_written_this_run}")
     print(f"[summary] Totals after run → non-empty TEXT_HTML: {total_html_nonempty} | non-empty TEXT_PDF: {total_pdf_nonempty}")
-    print(f"[ok] Wrote: {OUT_CSV}")
+    print(f"[ok] Wrote: {out_path}")
     print("[note] Empty TEXT_PDF usually means missing file, image-only PDF, or parser failure (consider OCR).")
 
 
