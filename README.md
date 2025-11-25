@@ -70,6 +70,14 @@ Step 01 input options (set as env vars when invoking):
 If `data/01_overheid_results.csv` already exists, step 01 is skipped unless you force it with `RUN_STEP1=1`. The script stops early if prerequisites are missing.
 At the end, the script also copies the latest participants file to the repo root as `deelnemers_lbv_lbvplus_YYYY_MM_DD.csv` for convenient sharing while keeping bulk CSVs under `data/` (which is git-ignored).
 
+## LLM stage/address method (step 04) and quality checks
+
+- Prompting: `scripts/04_ai_classify_lbv_and_addresses.py` concatenates `TEXT_HTML` + `TEXT_PDF` and asks the model for LBV/LBV+ classification, withdrawal scope, procedural stage (receipt, draft, definitive), and the main farm address. Prompts are in Dutch and conservative; draft signals win when both draft and definitive wording appear. Address confidence and LBV confidence are returned per row.
+- Manual truth set: 406 publications exported to `experiments/llm_improvement_testing/manual_stage_truth.csv`; 343 rows were manually labeled (187 receipt, 70 draft, 86 definitive). Unlabeled rows stayed blank and were excluded from scoring.
+- Baseline vs refined prompt: The earlier prompt (column `STAGE_LLM`) disagreed with manual labels on 94 of 343 labeled rows (mismatches driven by overly eager definitive choices). We hardened the rules (draft priority, explicit receipt heuristics, ignore nav/metadata noise), captured as `STAGE_NEW_LLM`.
+- Latest results (model `gpt-4.1-mini`): `STAGE_NEW_LLM` vs manual labels shows 1 mismatch out of 343 labeled rows (see `experiments/llm_improvement_testing/mismatches_latest.csv`). The remaining mismatch appears to be a manual label error (publication was an ontwerpbesluit, so draft is correct). Confusion summary is stored in `experiments/llm_improvement_testing/stage_run_results.json`.
+- Usage in pipeline: Step 04 writes `STAGE` (from the refined prompt) to `data/04_lbv_enriched_with_ai_summary.csv`, step 05 carries it forward, and step 06 exposes both `stage_latest_llm` and a blank `stage_latest_manual` column for optional human overrides. The province summary uses the manual value when present, otherwise the LLM value.
+
 Intermediate CSVs are overwritten in place, so archive raw exports if you need reproducibility. The repo now keeps older drops under `data/archive/<date>/` and full run folders under `data/runs/<timestamp>/` (both git-ignored). Promote only the “blessed” outputs into `data/`.
 
 ## Data protection
