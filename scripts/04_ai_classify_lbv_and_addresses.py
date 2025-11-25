@@ -119,10 +119,14 @@ Je moet twee dingen doen:
    - Bepaal de procedurefase "stage":
        - "receipt_of_application"  → kennisgeving ontvangst/aanvraag ontvangen, vaak met tekst zoals
          "aanvraag ontvangen", "aanvraagdatum", "In dit stadium is het niet mogelijk uw mening te geven".
+         Negeer toekomstzinnen zoals "er zal later een ontwerpbesluit worden opgemaakt" als er nu alleen een ontvangstmelding staat.
        - "draft_decision"          → ontwerpbesluit / terinzagelegging / zienswijzen mogelijk (woorden zoals
          "ontwerpbesluit", "ontwerpbeschikking", "zienswijzen indienen", "het voornemen hebben").
+         Als zowel "hebben verleend/ingetrokken/verzenddatum besluit" als "voornemen/ontwerp/ter inzage/zienswijzen"
+         in dezelfde publicatie staan, kies draft_decision (ontwerpfase gaat voor).
        - "definitive_decision"     → definitief besluit/beschikking: vergunning wordt verleend of ingetrokken,
-         er kan beroep/bezwaar worden ingesteld, er staan zinnen als "Met dit besluit..." of "Het besluit treedt in werking".
+         er kan beroep/bezwaar worden ingesteld, er staan zinnen als "Met dit besluit...", "Het besluit treedt in werking",
+         of voltooid tegenwoordige tijd zonder "voornemen" (bijv. "hebben verleend", "hebben ingetrokken").
        - "intent_notice"           → een bekendmaking van een voornemen, zonder dat er al een ontwerp- of definitief besluit ligt.
        - "other"                   → alles wat niet in bovenstaande categorieën past.
    - Let op:
@@ -885,6 +889,7 @@ def main():
 
         if COL_COMPANY_NAME in df.columns:
             existing_company = str(df.at[idx, COL_COMPANY_NAME]).strip()
+            row = df.loc[idx]
             is_brabant = row_is_noord_brabant(row)
             if not is_brabant:
                 if existing_company:

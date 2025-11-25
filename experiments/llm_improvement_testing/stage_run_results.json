@@ -1,0 +1,25 @@
+{
+  "model": "gpt-4.1-mini",
+  "input_rows": 406,
+  "system_prompt": "Je bent een formele, conservatieve juridisch schrijver.\nJe bepaalt uitsluitend de fase (STAGE) van een bekendmaking over LBV/LBV+.\nLees de volledige tekst en kies de beste optie:\n- receipt_of_application: tekst zegt dat de aanvraag is ontvangen/kennisgegeven.\n- draft_decision: ontwerp, voornemen, ontwerpbeschikking/-besluit, ter inzage.\n- definitive_decision: besluit/beschikking zonder ontwerp, vergunning verleend/ingetrokken, beroep/bezwaar fase.\n\nRegels (prioriteiten):\n- Definitief: expliciet \"vergunning/beschikking/besluit verleend\", \"intrekken\", \"verzenddatum besluit\", \"beroep/bezwaar mogelijk\", of formuleringen als \"hebben verleend/hebben ingetrokken/hebben genomen\" (voltooid tegenwoordige tijd, géén voornemen). Dat zijn definitieve besluiten.\n- Draft: \"voornemen te verlenen/intrekken\" of \"ontwerp/ontwerpbeschikking/ontwerpbesluit/ter inzage/zienswijzen indienen\" als actieve context. Als zowel een zin met \"hebben verleend/ingetrokken\" als \"voornemen/ontwerp/ter inzage/zienswijzen\" in dezelfde bekendmaking staan, kies draft_decision (ontwerp-fase gaat voor).\n- Als \"voornemen\" expliciet wordt genoemd, kies draft_decision, óók als er verzenddatum besluit of inwerkingtreding/beroep wordt genoemd (dat hoort bij ontwerp ter inzage).\n- Receipt: duidelijke ontvangst-woorden zoals \"aanvraag ontvangen\", \"kennisgeving ontvangst\", \"verzoek tot het behandelen van een aanvraag\", en géén ontwerp-signalen (ontwerpbesluit/ter inzage/zienswijzen/voornemen) en géén besluitwoorden (verlenen/intrekken/beschikking/besluit/beroep) in de inhoud. Negeer losse \"ontwerp\" hits uit navigatie/metadata of in toekomstparagrafen (\"er zal later een ontwerpbesluit komen\") als er nu alleen een ontvangstmelding staat.\n- Lege of onleesbare tekst: meld dat kort in de evidence en kies de best passende van de drie (geen \"unknown\" of \"unreadable\"). Zonder signalen val conservatief terug op receipt_of_application.\n- Kies nooit receipt_of_application als er ontwerp, besluit/beschikking, verleend, intrekken of beroep/bezwaar wordt genoemd.\n- Geef een korte quote als evidence.\n\nReturn JSON: {\"stage\": \"...\", \"evidence\": \"...\"}.\n",
+  "user_template": "Bepaal de STAGE op basis van de tekst.\n\nTEXT:\n\"{TEXT}\"\n",
+  "mismatches_count": 1,
+  "matched_rows": 343,
+  "confusion": {
+    "definitive_decision": {
+      "definitive_decision": 86,
+      "draft_decision": 0,
+      "receipt_of_application": 0
+    },
+    "draft_decision": {
+      "definitive_decision": 1,
+      "draft_decision": 69,
+      "receipt_of_application": 0
+    },
+    "receipt_of_application": {
+      "definitive_decision": 0,
+      "draft_decision": 0,
+      "receipt_of_application": 187
+    }
+  }
+}

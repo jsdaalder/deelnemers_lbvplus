@@ -1,3 +1,4 @@
+import argparse
 import pandas as pd
 from collections import defaultdict
 from pathlib import Path
@@ -21,22 +22,52 @@ class UnionFind:
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "data"
+# Accepts the step 05 output directly; legacy 06_vergunningen files are archived.
+DEFAULT_INPUT = DATA_DIR / "05_lbv_enriched_addresses.csv"
+DEFAULT_OUTPUT = DATA_DIR / "06_deelnemers_lbv_lbvplus.csv"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Groepeer vergunning-publicaties op boerderijniveau."
+    )
+    parser.add_argument(
+        "--input",
+        default=str(DEFAULT_INPUT),
+        help="Input CSV met verrijkte vergunningen (default: data/05_lbv_enriched_addresses.csv).",
+    )
+    parser.add_argument(
+        "--output",
+        default=str(DEFAULT_OUTPUT),
+        help="Output CSV met deelnemers (default: data/06_deelnemers_lbv_lbvplus.csv).",
+    )
+    parser.add_argument(
+        "--max-rows",
+        type=int,
+        default=None,
+        help="Optioneel maximum aantal rijen voor snelle checks.",
+    )
+    return parser.parse_args()
 
 
 def main():
+    args = parse_args()
+
     # ---------- 1. Load input ----------
-    infile = DATA_DIR / "06_vergunningen_lbv_lbvplus.csv"
-    outfile = DATA_DIR / "06_deelnemers_lbv_lbvplus.csv"
+    infile = Path(args.input).expanduser().resolve()
+    outfile = Path(args.output).expanduser().resolve()
 
     # Read as strings; we'll parse dates separately
     df = pd.read_csv(infile, dtype=str)
+    if args.max_rows is not None:
+        df = df.head(args.max_rows)
 
     # If there's an existing farm_id column, ignore/replace it
     if "farm_id" in df.columns:
         df = df.drop(columns=["farm_id"])
 
-    # Parse Datum (expected format: dd/mm/yyyy)
-    df["Datum"] = pd.to_datetime(df["Datum"], format="%d/%m/%Y", errors="coerce")
+    # Parse Datum (supports dd/mm/yyyy and dd-mm-yyyy)
+    df["Datum"] = pd.to_datetime(df["Datum"], dayfirst=True, errors="coerce")
 
     # Basic cleaning: require doc_id, AddressKey, Datum
     df = df[df["doc_id"].notna() & (df["doc_id"] != "")]
@@ -104,6 +135,18 @@ def main():
         .sort_values(["farm_id", "AddressKey"])
     )
 
+    # Collect provenance: all doc_ids and address keys per farm
+    doc_ids_all = (
+        df.groupby("farm_id")["doc_id"]
+        .unique()
+        .apply(lambda vals: ",".join(sorted(vals)))
+    )
+    addresskeys_all = (
+        df.groupby("farm_id")["AddressKey"]
+        .unique()
+        .apply(lambda vals: ",".join(sorted(vals)))
+    )
+
     out = addresses.merge(
         latest_status,
         left_on="farm_id",
@@ -117,8 +160,21 @@ def main():
         "Titel": "Titel_latest",
         "Datum": "Datum_latest",
         "Instantie": "Instantie_latest",
-        "STAGE": "STAGE_latest",
+        "STAGE": "stage_latest_llm",
     })
+
+    # Provide an empty manual stage column next to the LLM stage
+    out["stage_latest_manual"] = ""
+    # ensure ordering keeps manual column next to llm column
+    cols = list(out.columns)
+    if "stage_latest_llm" in cols and "stage_latest_manual" in cols:
+        cols.remove("stage_latest_manual")
+        idx = cols.index("stage_latest_llm") + 1
+        cols.insert(idx, "stage_latest_manual")
+        out = out[cols]
+
+    out["doc_ids_all"] = out["farm_id"].map(doc_ids_all)
+    out["AddressKeyAll"] = out["farm_id"].map(addresskeys_all)
 
     # Optional: sort by farm_id then street for readability
     out = out.sort_values(["farm_id", "B_PLAATS", "B_STRAATNAAM", "B_HUIS_NR"])

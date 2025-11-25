@@ -39,8 +39,10 @@ COL_ADDRESS_KEY = "AddressKey"
 
 PAIR_RE = re.compile(r"^\s*(\d+)\s*(?:en|&)\s*(\d+)\s*$", re.IGNORECASE)
 RANGE_RE = re.compile(r"^\s*(\d+)\s*[-–]\s*(\d+)\s*$")
+RANGE_SUFFIX_RE = re.compile(r"^\s*(\d+)([A-Za-z]?)\s*[-–]\s*(\d+)([A-Za-z]?)\s*$")
 TM_RE = re.compile(r"^\s*(\d+)\s*t/m\s*(\d+)\s*$", re.IGNORECASE)
 POSTCODE_RE = re.compile(r"^\s*(\d{4})\s*([A-Za-z]{2})\s*$")
+TOKEN_RE = re.compile(r"^(\d+)([A-Za-z]*)$")
 
 PDOK_ENDPOINTS = [
     "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free",
@@ -82,26 +84,57 @@ def expand_house_numbers(df: pd.DataFrame) -> pd.DataFrame:
         if not expansions:
             records.append(base)
             continue
-        for number in expansions:
+        for number, suffix in expansions:
             copy = base.copy()
             copy[COL_NUMBER] = number
+            copy[COL_SUFFIX] = suffix
             records.append(copy)
     return pd.DataFrame.from_records(records, columns=df.columns)
 
 
-def iter_house_numbers(raw: str) -> Iterable[str]:
+def iter_house_numbers(raw: str) -> Iterable[tuple[str, str]]:
     text = (raw or "").strip()
     if not text:
         return []
     match = PAIR_RE.match(text)
     if match:
-        return [match.group(1), match.group(2)]
-    match = RANGE_RE.match(text) or TM_RE.match(text)
+        return [(match.group(1), ""), (match.group(2), "")]
+
+    # Split chains like "7-9-11" or "27-27A-29"
+    parts = re.split(r"\s*[-–]\s*", text)
+    if len(parts) > 2:
+        parsed = []
+        for part in parts:
+            token_match = TOKEN_RE.match(part)
+            if not token_match:
+                return []
+            num, suf = token_match.groups()
+            parsed.append((num, suf.upper()))
+        return parsed
+
+    # Handle ranges, including cases like "27-27A" or "32-32a"
+    match_suffix_range = RANGE_SUFFIX_RE.match(text)
+    if match_suffix_range:
+        start_num, start_suf, end_num, end_suf = match_suffix_range.groups()
+        # If suffixes are involved, treat as a pair of explicit addresses
+        if start_suf or end_suf:
+            return [(start_num, start_suf.upper()), (end_num, end_suf.upper())]
+
+    # Plain numeric range like "7-11": treat conservatively as two explicit numbers
+    match = RANGE_RE.match(text)
+    if match:
+        start, end = match.groups()
+        return [(start, ""), (end, "")]
+
+    # Explicit range semantics "t/m": expand fully
+    match = TM_RE.match(text)
     if match:
         start, end = int(match.group(1)), int(match.group(2))
         if start > end:
             start, end = end, start
-        return [str(num) for num in range(start, end + 1)]
+        return [(str(num), "") for num in range(start, end + 1)]
+
+    # If it matches the suffix-range shape but without suffix letters, it was handled above
     return []
 
 
