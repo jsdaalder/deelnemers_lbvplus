@@ -103,6 +103,21 @@ At the end, the script also copies the latest participants file to the repo root
 - Latest results (model `gpt-4.1-mini`): `STAGE_NEW_LLM` vs manual labels shows 1 mismatch out of 343 labeled rows (see `experiments/llm_improvement_testing/mismatches_latest.csv`). The remaining mismatch appears to be a manual label error (publication was an ontwerpbesluit, so draft is correct). Confusion summary is stored in `experiments/llm_improvement_testing/stage_run_results.json`.
 - Usage in pipeline: Step 04 writes `STAGE` (from the refined prompt) to `data/04_lbv_enriched_with_ai_summary.csv`, step 05 carries it forward, and step 06 exposes both `stage_latest_llm` and a blank `stage_latest_manual` column for optional human overrides. The province summary uses the manual value when present, otherwise the LLM value.
 
+## Current province-stage overview (cutoff: definitive ≥6 weeks old as of 2025-11-25)
+
+| province | total_farms | receipt_of_application | draft_decision | definitive_decision | irrevocable_on_2025_11_25 |
+| --- | --- | --- | --- | --- | --- |
+| Drenthe | 24 | 23 | 0 | 1 | 1 |
+| Flevoland | 3 | 2 | 0 | 1 | 0 |
+| Fryslân | 8 | 8 | 0 | 0 | 0 |
+| Gelderland | 78 | 2 | 31 | 45 | 33 |
+| Limburg | 123 | 108 | 15 | 0 | 0 |
+| Noord-Brabant | 61 | 0 | 36 | 25 | 22 |
+| Noord-Holland | 1 | 1 | 0 | 0 | 0 |
+| Overijssel | 40 | 28 | 3 | 9 | 9 |
+| Utrecht | 3 | 0 | 1 | 2 | 1 |
+| Total | 341 | 172 | 86 | 83 | 66 |
+
 Intermediate CSVs are overwritten in place, so archive raw exports if you need reproducibility. The repo now keeps older drops under `data/archive/<date>/` and full run folders under `data/runs/<timestamp>/` (both git-ignored). Promote only the “blessed” outputs into `data/`.
 
 ## Data protection
