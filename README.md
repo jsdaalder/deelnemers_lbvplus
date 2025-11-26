@@ -45,7 +45,7 @@ Utilities for parsing overheid.nl publications, enriching them with local metada
    python scripts/02_enrich_with_html_and_pdfs.py --in data/01_overheid_results.csv --out data/02_lbv_enriched.csv
    ```
 3. **Extract PDF text**  
-   Adjust constants in `scripts/03_extract_pdf_text.py` if needed and run `python scripts/03_extract_pdf_text.py` to produce `data/03_lbv_enriched_with_pdf.csv`.
+   Run `python scripts/03_extract_pdf_text.py` to pull readable text from PDFs into `data/03_lbv_enriched_with_pdf.csv`.
 4. **LLM classification**  
    Ensure `.env` exists, set `DEFAULT_MODEL` or basenames in `scripts/04_ai_classify_lbv_and_addresses.py`, then run it to generate `data/04_lbv_enriched_with_ai_summary.csv`.
 5. **Address enrichment**  
@@ -68,36 +68,36 @@ Step 01 input options (set as env vars when invoking):
 - Direct SRU API: `MODE=api API_QUERY='c.product-area==officielepublicaties AND cql.textAndIndexes=\"lbv\"' API_MAX=500 bash scripts/run_all.sh`
 
 If `data/01_overheid_results.csv` already exists, step 01 is skipped unless you force it with `RUN_STEP1=1`. The script stops early if prerequisites are missing.
-At the end, the script also copies the latest participants file to the repo root as `deelnemers_lbv_lbvplus_YYYY_MM_DD.csv` for convenient sharing while keeping bulk CSVs under `data/` (which is git-ignored).
+At the end, the script also copies the latest participants file to the repo root as `deelnemers_lbv_lbvplus_YYYY_MM_DD.csv` for convenient sharing while keeping the big CSVs under `data/` (git-ignored).
 
 ## Step-by-step detail (what each script does)
 
 - **01_parse_overheid_pages.py**  
   Input: either local HTML exports (from zoek.officielebekendmakingen.nl) or a SRU API query.  
-  Output: `data/01_overheid_results.csv` with raw publication metadata (title, date, URLs, government body). No LLM involved.
+  Output: `data/01_overheid_results.csv` with raw publication info (title, date, URLs, government body). No AI yet.
 
 - **02_enrich_with_html_and_pdfs.py**  
-  Download and store HTML/PDF locally, add `doc_id`, and stitch text columns (`TEXT_HTML`, `TEXT_PDF`). Produces `data/02_lbv_enriched.csv`. This is the backbone for everything else.
+  Saves the HTML/PDF files locally, gives each row a `doc_id`, and combines the text into `TEXT_HTML` and `TEXT_PDF`. Produces `data/02_lbv_enriched.csv`; later steps build on this file.
 
 - **03_extract_pdf_text.py**  
-  Extracts readable text from PDFs into `TEXT_PDF` where missing, yielding `data/03_lbv_enriched_with_pdf.csv`. HTML is kept alongside PDF text so the LLM sees both.
+  Fills in `TEXT_PDF` by reading the PDFs when that column is still empty, yielding `data/03_lbv_enriched_with_pdf.csv`. The HTML text stays in place so the AI sees both sources.
 
 - **04_ai_classify_lbv_and_addresses.py**  
-  Concatenates `TEXT_HTML` + `TEXT_PDF`, prompts the LLM (default `gpt-4.1-mini`) to:  
-  - detect LBV/LBV+ relevance and withdrawal scope,  
-  - classify stage (receipt, draft, definitive) using conservative Dutch rules,  
-  - extract the primary farm address (street/number/suffix/postcode/place) with a confidence score.  
-  Output: `data/04_lbv_enriched_with_ai_summary.csv` with `STAGE`, `LBV_TYPE`, `WITHDRAWAL`, address fields, confidences, and provenance (`LBV_METHOD`, `AI_SOURCE`).
+  Combines `TEXT_HTML` + `TEXT_PDF` and asks the AI (default `gpt-4.1-mini`) to:  
+  - spot LBV/LBV+ relevance and withdrawal scope,  
+  - decide the stage (receipt, draft, definitive) using conservative Dutch rules,  
+  - pull out the main farm address (street/number/suffix/postcode/place) with a confidence score.  
+  Output: `data/04_lbv_enriched_with_ai_summary.csv` with stage, LBV fields, address fields, confidences, and source notes.
 
 - **05_enrich_addresses.py**  
-  Deterministic cleanup after the LLM: split multi-number house strings, look up missing postcodes via PDOK, normalize, and build `AddressKey` for grouping. Output: `data/05_lbv_enriched_addresses.csv`.
+  Rule-based cleanup after the AI: split house numbers like “7-9”, look up missing postcodes via PDOK, tidy the address, and build `AddressKey` for grouping. Output: `data/05_lbv_enriched_addresses.csv`.
 
 - **06_build_deelnemers.py**  
-  Unions publications by `AddressKey` into farm-level participants, assigns stable `farm_id`s, and keeps the latest publication per farm. Adds both `stage_latest_llm` and an empty `stage_latest_manual` column for overrides. Output: `data/06_deelnemers_lbv_lbvplus.csv`. Also used by the summary script to compute per-province counts.
+  Groups publications that share an `AddressKey` into farm-level records, assigns stable `farm_id`s, and keeps the latest publication per farm. Adds both `stage_latest_llm` and an empty `stage_latest_manual` column for anyone who wants to override the AI. Output: `data/06_deelnemers_lbv_lbvplus.csv`, which also feeds the province counts.
 
 ## LLM stage/address method (step 04) and quality checks
 
-- Prompting: `scripts/04_ai_classify_lbv_and_addresses.py` concatenates `TEXT_HTML` + `TEXT_PDF` and asks the model for LBV/LBV+ classification, withdrawal scope, procedural stage (receipt, draft, definitive), and the main farm address. Prompts are in Dutch and conservative; draft signals win when both draft and definitive wording appear. Address confidence and LBV confidence are returned per row.
+- Prompting: `scripts/04_ai_classify_lbv_and_addresses.py` combines `TEXT_HTML` + `TEXT_PDF` and asks the model for LBV/LBV+ classification, withdrawal scope, procedural stage (receipt, draft, definitive), and the main farm address. Prompts are in Dutch and conservative; draft signals win when both draft and definitive wording appear. Address confidence and LBV confidence are returned per row.
 - Manual truth set: 406 publications exported to `experiments/llm_improvement_testing/manual_stage_truth.csv`; 343 rows were manually labeled (187 receipt, 70 draft, 86 definitive). Unlabeled rows stayed blank and were excluded from scoring.
 - Baseline vs refined prompt: The earlier prompt (column `STAGE_LLM`) disagreed with manual labels on 94 of 343 labeled rows (mismatches driven by overly eager definitive choices). We hardened the rules (draft priority, explicit receipt heuristics, ignore nav/metadata noise), captured as `STAGE_NEW_LLM`.
 - Latest results (model `gpt-4.1-mini`): `STAGE_NEW_LLM` vs manual labels shows 1 mismatch out of 343 labeled rows (see `experiments/llm_improvement_testing/mismatches_latest.csv`). The remaining mismatch appears to be a manual label error (publication was an ontwerpbesluit, so draft is correct). Confusion summary is stored in `experiments/llm_improvement_testing/stage_run_results.json`.
@@ -119,7 +119,7 @@ At the end, the script also copies the latest participants file to the repo root
 | Utrecht | 3 | 0 | 1 | 2 | 1 |
 | Total | 341 | 172 | 86 | 83 | 66 |
 
-Intermediate CSVs are overwritten in place, so archive raw exports if you need reproducibility. The repo now keeps older drops under `data/archive/<date>/` and full run folders under `data/runs/<timestamp>/` (both git-ignored). Promote only the “blessed” outputs into `data/`.
+Intermediate CSVs get overwritten, so save copies elsewhere if you want to keep history. Older drops live under `data/archive/<date>/` and full run folders under `data/runs/<timestamp>/` (both git-ignored). Keep the current “official” outputs directly under `data/`.
 
 ## Data protection
 
