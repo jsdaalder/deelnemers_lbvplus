@@ -70,6 +70,31 @@ Step 01 input options (set as env vars when invoking):
 If `data/01_overheid_results.csv` already exists, step 01 is skipped unless you force it with `RUN_STEP1=1`. The script stops early if prerequisites are missing.
 At the end, the script also copies the latest participants file to the repo root as `deelnemers_lbv_lbvplus_YYYY_MM_DD.csv` for convenient sharing while keeping bulk CSVs under `data/` (which is git-ignored).
 
+## Step-by-step detail (what each script does)
+
+- **01_parse_overheid_pages.py**  
+  Input: either local HTML exports (from zoek.officielebekendmakingen.nl) or a SRU API query.  
+  Output: `data/01_overheid_results.csv` with raw publication metadata (title, date, URLs, government body). No LLM involved.
+
+- **02_enrich_with_html_and_pdfs.py**  
+  Download and store HTML/PDF locally, add `doc_id`, and stitch text columns (`TEXT_HTML`, `TEXT_PDF`). Produces `data/02_lbv_enriched.csv`. This is the backbone for everything else.
+
+- **03_extract_pdf_text.py**  
+  Extracts readable text from PDFs into `TEXT_PDF` where missing, yielding `data/03_lbv_enriched_with_pdf.csv`. HTML is kept alongside PDF text so the LLM sees both.
+
+- **04_ai_classify_lbv_and_addresses.py**  
+  Concatenates `TEXT_HTML` + `TEXT_PDF`, prompts the LLM (default `gpt-4.1-mini`) to:  
+  - detect LBV/LBV+ relevance and withdrawal scope,  
+  - classify stage (receipt, draft, definitive) using conservative Dutch rules,  
+  - extract the primary farm address (street/number/suffix/postcode/place) with a confidence score.  
+  Output: `data/04_lbv_enriched_with_ai_summary.csv` with `STAGE`, `LBV_TYPE`, `WITHDRAWAL`, address fields, confidences, and provenance (`LBV_METHOD`, `AI_SOURCE`).
+
+- **05_enrich_addresses.py**  
+  Deterministic cleanup after the LLM: split multi-number house strings, look up missing postcodes via PDOK, normalize, and build `AddressKey` for grouping. Output: `data/05_lbv_enriched_addresses.csv`.
+
+- **06_build_deelnemers.py**  
+  Unions publications by `AddressKey` into farm-level participants, assigns stable `farm_id`s, and keeps the latest publication per farm. Adds both `stage_latest_llm` and an empty `stage_latest_manual` column for overrides. Output: `data/06_deelnemers_lbv_lbvplus.csv`. Also used by the summary script to compute per-province counts.
+
 ## LLM stage/address method (step 04) and quality checks
 
 - Prompting: `scripts/04_ai_classify_lbv_and_addresses.py` concatenates `TEXT_HTML` + `TEXT_PDF` and asks the model for LBV/LBV+ classification, withdrawal scope, procedural stage (receipt, draft, definitive), and the main farm address. Prompts are in Dutch and conservative; draft signals win when both draft and definitive wording appear. Address confidence and LBV confidence are returned per row.
