@@ -6,3 +6,4 @@ data/runs/
 experiments/llm_improvement_testing/*.csv
 __pycache__/
 data/*.csv
+deelnemers_lbv_lbvplus_*.csv
