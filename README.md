@@ -9,7 +9,7 @@ Utilities for parsing overheid.nl publications, enriching them with local metada
 - `scripts/03_extract_pdf_text.py` – fill `TEXT_PDF` for rows that have a local PDF (`data/03_lbv_enriched_with_pdf.csv`).
 - `scripts/04_ai_classify_lbv_and_addresses.py` – call OpenAI to add LBV/LBV+, withdrawal, stage, address metadata, and extract company names when available (`data/04_lbv_enriched_with_ai_summary.csv`).
 - `scripts/05_enrich_addresses.py` – deterministic address cleanup: split multi-number house strings, look up missing postcodes via PDOK, and emit `AddressKey` for grouping (`data/05_lbv_enriched_addresses.csv`).
-- `scripts/06_build_deelnemers.py` – group permit rows into farm-level participants (`data/06_deelnemers_lbv_lbvplus.csv`).
+- `scripts/06_build_deelnemers.py` – group permit rows into farm-level participants (`data/06_deelnemers_lbv_lbvplus.csv`), carrying `COMPANY_NAME`/`company_id` forward per farm/address.
 - `data/` – numbered CSV checkpoints so it is obvious which step produced each file (e.g., `02_lbv_enriched.csv` came from script 02). See `data/DATA_README.md` for archive/run layout and provenance.
 - `experiments/llm_improvement_testing/` – scratch space for evaluating stage/address prompts; JSON results retained, CSVs git-ignored. See folder README.
 - `agents.md` – detailed prompt/agent documentation for the LLM steps.

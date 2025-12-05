@@ -130,10 +130,42 @@ def main():
             "B_HUIS_NR_TOEV",
             "B_POSTCODE",
             "B_PLAATS",
+            "COMPANY_NAME",
+            "company_id",
         ]]
         .drop_duplicates()
         .sort_values(["farm_id", "AddressKey"])
     )
+
+    def pick_representative(series: pd.Series) -> str:
+        """Pick a stable, non-empty value (mode; else first) for company fields."""
+        cleaned = series.fillna("").astype(str).str.strip()
+        cleaned = cleaned[cleaned != ""]
+        if cleaned.empty:
+            return ""
+        modes = cleaned.mode()
+        return modes.iloc[0] if not modes.empty else cleaned.iloc[0]
+
+    # Aggregate company fields per (farm_id, AddressKey) to keep them in the output
+    company_map = (
+        df.groupby(["farm_id", "AddressKey"])["COMPANY_NAME"]
+        .apply(pick_representative)
+        .reset_index()
+    )
+    company_id_map = (
+        df.groupby(["farm_id", "AddressKey"])["company_id"]
+        .apply(pick_representative)
+        .reset_index()
+    )
+    addresses = addresses.merge(company_map, on=["farm_id", "AddressKey"], how="left", suffixes=("", "_agg"))
+    addresses = addresses.merge(company_id_map, on=["farm_id", "AddressKey"], how="left", suffixes=("", "_agg"))
+    # Prefer aggregated (non-empty) values when the deduped row had blanks
+    for col in ("COMPANY_NAME", "company_id"):
+        agg_col = f"{col}_agg"
+        addresses[col] = addresses[col].fillna("")
+        mask = addresses[col] == ""
+        addresses.loc[mask, col] = addresses.loc[mask, agg_col]
+        addresses = addresses.drop(columns=[agg_col])
 
     # Collect provenance: all doc_ids and address keys per farm
     doc_ids_all = (

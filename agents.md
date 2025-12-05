@@ -7,6 +7,7 @@ This repo currently defines two OpenAI-powered “agents” in `scripts/04_ai_cl
 - **Location:** `SYSTEM_PROMPT_FULL` / `USER_TEMPLATE_FULL` inside `scripts/04_ai_classify_lbv_and_addresses.py`.
 - **Purpose:** Determine whether the publication concerns the Landelijke beëindigingsregeling (LBV/LBV+), whether a Natura 2000 permit is being withdrawn (scope full/partial/unknown), and which procedural stage the notice represents (receipt, draft, definitive decision, intent notice, other).
 - **Address extraction:** Also extracts the primary farm address (street, number, suffix, postcode, place) and returns a confidence score for both the classification and the address.
+- **Company name:** For Noord-Brabant notices, a rule-based scraper captures the bedrijfnaam when present; blanks are kept when the publication does not list one. The value is carried through to step 06 outputs.
 - **Model:** Defaults to `gpt-4.1-mini`, configurable via `DEFAULT_MODEL`. Responses must be valid JSON with the schema embedded in `USER_TEMPLATE_FULL`.
 - **Usage tips:**
   - Concatenate `TEXT_HTML` and `TEXT_PDF` before prompting so the agent sees all available context.
