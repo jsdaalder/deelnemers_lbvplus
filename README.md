@@ -119,7 +119,7 @@ At the end, the script also copies the latest participants file to the repo root
 | Utrecht | 3 | 0 | 1 | 2 | 1 |
 | Total | 341 | 172 | 86 | 83 | 66 |
 
-Intermediate CSVs get overwritten, so save copies elsewhere if you want to keep history. Older drops live under `data/archive/<date>/` and full run folders under `data/runs/<timestamp>/` (both git-ignored). Keep the current “official” outputs directly under `data/`.
+Intermediate CSVs get overwritten, so save copies elsewhere if you want to keep history. Older drops live under `data/archive/<date>/` and full run folders under `data/runs/<timestamp>/` (both git-ignored). Keep the current “official” outputs directly under `data/` (CSV files are git-ignored to avoid publishing names/addresses by default; rerun the pipeline locally to regenerate them).
 
 ## Data protection
 
