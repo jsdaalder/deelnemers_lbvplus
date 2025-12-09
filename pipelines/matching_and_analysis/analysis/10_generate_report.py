@@ -144,7 +144,8 @@ def plot_charts(master: pd.DataFrame, output_dir: Path, year: str = "2022") -> N
         fontsize=12,
     )
 
-    methods = master.assign(link_method=master["link_method"].fillna("")).groupby("link_method")["farm_id"].nunique()
+    farms_by_method = master.assign(link_method=master["link_method"].fillna("")).loc[:, ["farm_id", "link_method"]].drop_duplicates()
+    methods = farms_by_method.groupby("link_method")["farm_id"].nunique()
     slices = [
         ("Permit adres", methods.get("permit_adres", 0), summary_blue),
         ("Permit KVK-adres", methods.get("permit_kvk_adres", 0), "#6FA8DC"),
