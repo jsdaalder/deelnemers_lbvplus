@@ -71,13 +71,16 @@ info "Step 02: enrich with HTML/PDF context"
 
 info "Step 03: extract PDF text"
 "$PYTHON" scripts/03_extract_pdf_text.py \
-  --input data/02_lbv_enriched.csv \
-  --output data/03_lbv_enriched_with_pdf.csv
+  --in data/02_lbv_enriched.csv \
+  --out data/03_lbv_enriched_with_pdf.csv
 
 info "Step 04: LLM classification (LBV/LBV+, stage, address)"
 "$PYTHON" scripts/04_ai_classify_lbv_and_addresses.py \
-  --input data/03_lbv_enriched_with_pdf.csv \
-  --output data/04_lbv_enriched_with_ai_summary.csv
+  --in data/03_lbv_enriched_with_pdf.csv \
+  --out-csv data/04_lbv_enriched_with_ai_summary.csv \
+  --mode full \
+  --only-unclassified \
+  --limit 100000
 
 info "Step 05: deterministic address cleanup"
 "$PYTHON" scripts/05_enrich_addresses.py \
@@ -145,5 +148,11 @@ out.to_csv("data/province_stage_irrevocable.csv", index=False)
 print(out)
 print(f"[info] Wrote data/province_stage_irrevocable.csv (cutoff {cutoff})")
 PY
+
+info "Step 07: sync participants to uitgekochte_boeren_analyseren/data/raw"
+DEST_DIR="uitgekochte_boeren_analyseren/data/raw"
+mkdir -p "$DEST_DIR"
+cp data/06_deelnemers_lbv_lbvplus.csv "$DEST_DIR/06_deelnemers_lbv_lbvplus.csv"
+info "Synced to $DEST_DIR/06_deelnemers_lbv_lbvplus.csv for the downstream uitgekochte pipeline"
 
 info "Pipeline complete"

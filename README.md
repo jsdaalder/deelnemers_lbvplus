@@ -1,6 +1,6 @@
 # deelnemers_lbvplus
 
-Utilities for parsing overheid.nl publications, enriching them with local metadata, extracting PDF text, classifying LBV/LBV+ activity via OpenAI, post-processing addresses, and aggregating participants into a consolidated CSV for analysis. Current “blessed” outputs in `data/` come from run `data/runs/2025-11-19-151008` (git `0aa90980c03c86977a4c9e6b5cf9e789ad30688e`); earlier outputs are archived under `data/archive/2025-11-25/`.
+This project pulls government notices about the LBV/LBV+ scheme, extracts text from attached PDFs, asks an LLM to identify the stage and address, cleans the data, and groups publications into farms. A second stage matches those farms to other sources (minfin, animal counts) and produces charts. Final shareable results (charts plus a trimmed CSV) live under `final_results/<date>/`.
 
 ## Repository structure
 
@@ -54,6 +54,22 @@ Utilities for parsing overheid.nl publications, enriching them with local metada
 6. **Aggregate participants**  
    `python scripts/06_build_deelnemers.py --input data/05_lbv_enriched_addresses.csv --output data/06_deelnemers_lbv_lbvplus.csv`  
    Step 06 now reads the step-05 output directly. The legacy `06_vergunningen_lbv_lbvplus.csv` lives only in `data/archive/2025-11-25/` for reference.
+
+### Uitgekochte boeren (second-stage pipeline)
+- `scripts/run_all.sh` now also syncs the step-06 output to `uitgekochte_boeren_analyseren/data/raw/06_deelnemers_lbv_lbvplus.csv` so the downstream matching pipeline can run without manual copying.
+- Run the second-stage scripts from `uitgekochte_boeren_analyseren/scripts/` (see its README) after supplying the other required raw files (`minfin_dataset.csv`, `FTM_*`, fosfaat).
+- After generating `master_permits.csv` and charts, run `python3 uitgekochte_boeren_analyseren/scripts/13_export_final_results.py` to export a slimmed `farms_permits_minfin_<date>.csv` and chart overviews into `final_results/<YYYY_MM_DD>/` with dated filenames for each scrape run.
+
+### Outputs & sharing
+- Intermediate CSVs stay in `data/` (git-ignored).
+- Final shareable artifacts: `final_results/<date>/chart_all_<date>.png`, `charts_overview_<date>.pdf`, and `farms_permits_minfin_<date>.csv` (CSV is git-ignored; charts can be committed).
+
+### Data sources
+- LBV/LBV+ publications: scraped from officielebekendmakingen.nl (scraper built by Follow the Money) and processed via the LLM/enrichment pipeline in this repo.
+- Cluster data: derived from NRC’s Woo release of the 2021 agrarische basiskaart, enriched with deposition info; FICTIEF_BEDRIJFSNUMMER values were split into `cluster_id`s to handle multi-location farms. Source: https://www.rijksoverheid.nl/documenten/publicaties/2025/10/07/openbaargemaakt-document-bij-besluit-woo-verzoek-over-basiskaart-agrarische-bedrijfssituatie-2021
+- Minfin dataset: https://data.overheid.nl/dataset/financile-instrumenten-2022#panel-resources
+- Fosfaatbeschikkingen: Woo release of fosfaatbeschikkingen table: https://www.rijksoverheid.nl/documenten/publicaties/2023/09/19/tabel-gegevens-fosfaatbeschikkingen-bij-bob-woo-besluit-over-toekenning-fosfaatrechten-aan-agrarische-bedrijven
+- Dieraantallen (animal counts): Woo release of gecombineerde opgaven for agrarische ondernemingen (Follow the Money request): https://www.rijksoverheid.nl/documenten/woo-besluiten/2023/05/04/besluit-op-woo-verzoek-over-de-gecombineerde-opgaven-van-alle-agrarische-ondernemingen-in-nederland
 
 ### One-command run
 
