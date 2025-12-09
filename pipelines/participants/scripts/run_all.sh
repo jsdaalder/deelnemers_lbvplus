@@ -151,10 +151,10 @@ print(out)
 print(f"[info] Wrote data/province_stage_irrevocable.csv (cutoff {cutoff})")
 PY
 
-info "Step 07: sync participants to uitgekochte_boeren_analyseren/data/raw"
-DEST_DIR="$REPO_ROOT/pipelines/uitgekochte/data/raw"
+info "Step 07: sync participants to matching_and_analysis/data/raw"
+DEST_DIR="$REPO_ROOT/pipelines/matching_and_analysis/data/raw"
 mkdir -p "$DEST_DIR"
 cp data/06_deelnemers_lbv_lbvplus.csv "$DEST_DIR/06_deelnemers_lbv_lbvplus.csv"
-info "Synced to $DEST_DIR/06_deelnemers_lbv_lbvplus.csv for the downstream uitgekochte pipeline"
+info "Synced to $DEST_DIR/06_deelnemers_lbv_lbvplus.csv for the downstream matching/analysis pipeline"
 
 info "Pipeline complete"

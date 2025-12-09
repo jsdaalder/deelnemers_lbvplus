@@ -8,7 +8,7 @@ import shutil
 
 import pandas as pd
 
-PIPE_ROOT = Path(__file__).resolve().parents[1]  # pipelines/uitgekochte
+PIPE_ROOT = Path(__file__).resolve().parents[1]  # pipelines/matching_and_analysis
 REPO_ROOT = Path(__file__).resolve().parents[3]  # repo root
 PROCESSED_DIR = PIPE_ROOT / "data" / "processed"
 DEFAULT_MASTER = PROCESSED_DIR / "master_permits.csv"

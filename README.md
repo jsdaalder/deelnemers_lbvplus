@@ -4,7 +4,7 @@ This project pulls government notices about the LBV/LBV+ scheme, extracts text f
 
 Repo layout (two pipelines):
 - `pipelines/participants/` – LBV/LBV+ scraping + LLM classification + address cleanup + farm aggregation (steps 01–06). Data lives in `pipelines/participants/data/`. PDFs under `pipelines/participants/pdfs/`.
-- `pipelines/uitgekochte/` – downstream matching to minfin/FTM/fosfaat, animal counts, charts, and final export. Data lives in `pipelines/uitgekochte/data/`.
+- `pipelines/matching_and_analysis/` – downstream matching to minfin/FTM/fosfaat, animal counts, charts, and final export. Data lives in `pipelines/matching_and_analysis/data/`.
 - `final_results/<date>/` – published charts (tracked) and trimmed CSV (git-ignored).
 - `experiments/` – prompt/testing scratch space (unchanged).
 
@@ -17,7 +17,7 @@ Repo layout (two pipelines):
 - `pipelines/participants/scripts/05_enrich_addresses.py` – deterministic address cleanup: split multi-number house strings, look up missing postcodes via PDOK, and emit `AddressKey` for grouping (`pipelines/participants/data/05_lbv_enriched_addresses.csv`).
 - `pipelines/participants/scripts/06_build_deelnemers.py` – group permit rows into farm-level participants (`pipelines/participants/data/06_deelnemers_lbv_lbvplus.csv`), carrying `COMPANY_NAME`/`company_id` forward per farm/address.
 - `pipelines/participants/data/` – numbered CSV checkpoints; see `pipelines/participants/data/DATA_README.md` for archive/run layout and provenance.
-- `pipelines/uitgekochte/` – downstream matching pipeline (see its README) consuming `06_deelnemers_lbv_lbvplus.csv` and other Woo/minfin datasets.
+- `pipelines/matching_and_analysis/` – downstream matching pipeline (see its README) consuming `06_deelnemers_lbv_lbvplus.csv` and other Woo/minfin datasets.
 - `experiments/llm_improvement_testing/` – scratch space for evaluating stage/address prompts; JSON results retained, CSVs git-ignored. See folder README.
 
 ## Setup
@@ -61,13 +61,13 @@ Repo layout (two pipelines):
    `python pipelines/participants/scripts/06_build_deelnemers.py --input pipelines/participants/data/05_lbv_enriched_addresses.csv --output pipelines/participants/data/06_deelnemers_lbv_lbvplus.csv`  
    Step 06 now reads the step-05 output directly. The legacy `06_vergunningen_lbv_lbvplus.csv` lives only in `pipelines/participants/data/archive/2025-11-25/` for reference.
 
-### Uitgekochte boeren (second-stage pipeline)
-- `pipelines/participants/scripts/run_all.sh` syncs the step-06 output to `pipelines/uitgekochte/data/raw/06_deelnemers_lbv_lbvplus.csv` so the downstream matching pipeline can run without manual copying.
-- Run the second-stage scripts from `pipelines/uitgekochte/scripts/` (see its README) after supplying the other required raw files (`minfin_dataset.csv`, `FTM_*`, fosfaat).
-- After generating `master_permits.csv` and charts, run `python3 pipelines/uitgekochte/scripts/13_export_final_results.py` to export a slimmed `farms_permits_minfin_<date>.csv` and chart overviews into `final_results/<YYYY_MM_DD>/` with dated filenames for each scrape run.
+### Matching & analysis (second-stage pipeline)
+- `pipelines/participants/scripts/run_all.sh` syncs the step-06 output to `pipelines/matching_and_analysis/data/raw/06_deelnemers_lbv_lbvplus.csv` so the downstream matching pipeline can run without manual copying.
+- Run the second-stage scripts from `pipelines/matching_and_analysis/scripts/` (see its README) after supplying the other required raw files (`minfin_dataset.csv`, `FTM_*`, fosfaat).
+- After generating `master_permits.csv` and charts, run `python3 pipelines/matching_and_analysis/scripts/13_export_final_results.py` to export a slimmed `farms_permits_minfin_<date>.csv` and chart overviews into `final_results/<YYYY_MM_DD>/` with dated filenames for each scrape run.
 
 ### Outputs & sharing
-- Intermediate CSVs stay in `pipelines/participants/data/` and `pipelines/uitgekochte/data/` (git-ignored).
+- Intermediate CSVs stay in `pipelines/participants/data/` and `pipelines/matching_and_analysis/data/` (git-ignored).
 - Final shareable artifacts: `final_results/<date>/chart_all_<date>.png`, `charts_overview_<date>.pdf`, and `farms_permits_minfin_<date>.csv` (CSV is git-ignored; charts can be committed).
 
 ### Data sources

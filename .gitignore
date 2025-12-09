@@ -11,12 +11,12 @@ pipelines/participants/data/*.csv
 pipelines/participants/data/**/*.csv
 pipelines/participants/deelnemers_lbv_lbvplus_*.csv
 
-# Uitgekochte pipeline
-pipelines/uitgekochte/data/raw/*.csv
-pipelines/uitgekochte/data/processed/*.csv
-pipelines/uitgekochte/data/raw/.~lock.*
-pipelines/uitgekochte/data/processed/charts/*
-pipelines/uitgekochte/data/processed/*.pdf
+# Matching & analysis pipeline
+pipelines/matching_and_analysis/data/raw/*.csv
+pipelines/matching_and_analysis/data/processed/*.csv
+pipelines/matching_and_analysis/data/raw/.~lock.*
+pipelines/matching_and_analysis/data/processed/charts/*
+pipelines/matching_and_analysis/data/processed/*.pdf
 
 # Final outputs (CSV only; charts are tracked)
 final_results/**/*.csv
