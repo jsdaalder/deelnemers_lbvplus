@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Set
 import re
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-RAW_DIR = REPO_ROOT / "data" / "raw"
-PROCESSED_DIR = REPO_ROOT / "data" / "processed"
+PIPE_ROOT = Path(__file__).resolve().parents[1]  # pipelines/matching_and_analysis
+RAW_DIR = PIPE_ROOT / "data" / "raw"
+PROCESSED_DIR = PIPE_ROOT / "data" / "processed"
 
 MASTER_PATH = PROCESSED_DIR / "master_permits.csv"
 EXCLUDE_FOS_FARMS = {"FARM0082"}  # user-specified exclusions for fosfaat fallback
