@@ -145,25 +145,21 @@ def plot_charts(master: pd.DataFrame, output_dir: Path, year: str = "2022") -> N
     )
 
     methods = master.assign(link_method=master["link_method"].fillna("")).groupby("link_method")["farm_id"].nunique()
-    labels = []
-    sizes = []
-    colors = []
-
-    def add_slice(label, count, color):
-        if count > 0:
-            labels.append(f"{label} ({count})")
-            sizes.append(count)
-            colors.append(color)
-
-    add_slice("Permit adres", methods.get("permit_adres", 0), summary_blue)
-    add_slice("Permit KVK-adres", methods.get("permit_kvk_adres", 0), "#6FA8DC")
-    add_slice("Minfin KVK-adres", methods.get("minfin_kvk_adres", 0), summary_orange)
-    add_slice("Fosfaat naam (adres)", methods.get("fosfaat_adres", 0), summary_green)
+    slices = [
+        ("Permit adres", methods.get("permit_adres", 0), summary_blue),
+        ("Permit KVK-adres", methods.get("permit_kvk_adres", 0), "#6FA8DC"),
+        ("Minfin KVK-adres", methods.get("minfin_kvk_adres", 0), summary_orange),
+        ("Fosfaat naam (adres)", methods.get("fosfaat_adres", 0), summary_green),
+    ]
     not_linked = methods.get("niet_gelinkt", 0)
-    if not_linked > 0:
-        add_slice("Niet gelinkt", not_linked, "#BBBBBB")
+    if not_linked:
+        slices.append(("Niet gelinkt", not_linked, "#BBBBBB"))
 
-    linked_total = sum(s for l, s in zip(labels, sizes) if "Niet gelinkt" not in l)
+    labels = [f"{label} ({count})" for label, count, _ in slices if count > 0]
+    sizes = [count for _, count, _ in slices if count > 0]
+    colors = [color for _, count, color in slices if count > 0]
+
+    linked_total = unique_farms - not_linked
     pct_linked = linked_total / unique_farms * 100 if unique_farms else 0
 
     ax1.pie(sizes, labels=labels, colors=colors, autopct="%1.1f%%", startangle=120, textprops={"fontsize": 10})
