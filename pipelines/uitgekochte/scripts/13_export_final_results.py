@@ -8,12 +8,12 @@ import shutil
 
 import pandas as pd
 
-REPO_ROOT = Path(__file__).resolve().parent.parent  # uitgekochte_boeren_analyseren/
-MAIN_ROOT = REPO_ROOT.parent  # repo root
-PROCESSED_DIR = REPO_ROOT / "data" / "processed"
+PIPE_ROOT = Path(__file__).resolve().parents[1]  # pipelines/uitgekochte
+REPO_ROOT = Path(__file__).resolve().parents[3]  # repo root
+PROCESSED_DIR = PIPE_ROOT / "data" / "processed"
 DEFAULT_MASTER = PROCESSED_DIR / "master_permits.csv"
 DEFAULT_CHARTS_DIR = PROCESSED_DIR / "charts"
-DEFAULT_FINAL_ROOT = MAIN_ROOT / "final_results"
+DEFAULT_FINAL_ROOT = REPO_ROOT / "final_results"
 EXPORT_STEM = "farms_permits_minfin"
 DEFAULT_KEEP_COLS = [
     # Identifiers and company

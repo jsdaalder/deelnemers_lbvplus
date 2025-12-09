@@ -12,14 +12,16 @@ from openai import OpenAI
 from fpdf import FPDF
 from dotenv import load_dotenv
 
-load_dotenv()
+# Paths
+PIPE_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
+load_dotenv(REPO_ROOT / ".env")
 
 # =========================
 # Config / Paths / Columns
 # =========================
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = REPO_ROOT / "data"
+DATA_DIR = PIPE_ROOT / "data"
 
 IN_PATH = DATA_DIR / "03_lbv_enriched_with_pdf.csv"
 OUT_DIR = DATA_DIR

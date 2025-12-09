@@ -13,7 +13,7 @@ End-to-end flow to link permit-rescinded and minfin buy-out farms to the nationa
 - Optional venv: `python3 -m venv .venv && source .venv/bin/activate`
 - Install extras if needed: `pip install pandas pytest`
 - Deprecated/legacy kept for reference: `11_enrich_permits_with_company_deprecated.py`, `12_analysis_overview_deprecated.py`, `kvk_original.py`.
-- The root `scripts/run_all.sh` now syncs `data/06_deelnemers_lbv_lbvplus.csv` into `data/raw/06_deelnemers_lbv_lbvplus.csv` here; run that first so you do not need to copy manually.
+- The participants pipeline (`pipelines/participants/scripts/run_all.sh`) syncs its step-06 output into `pipelines/uitgekochte/data/raw/06_deelnemers_lbv_lbvplus.csv`; run that first so you do not need to copy manually.
 
 ## Pipeline (aligned to the clarified matching flow)
 1) **Combine FTM addresses + animal counts**  

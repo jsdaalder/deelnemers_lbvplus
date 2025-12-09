@@ -2,17 +2,23 @@
 
 This project pulls government notices about the LBV/LBV+ scheme, extracts text from attached PDFs, asks an LLM to identify the stage and address, cleans the data, and groups publications into farms. A second stage matches those farms to other sources (minfin, animal counts) and produces charts. Final shareable results (charts plus a trimmed CSV) live under `final_results/<date>/`.
 
+Repo layout (two pipelines):
+- `pipelines/participants/` – LBV/LBV+ scraping + LLM classification + address cleanup + farm aggregation (steps 01–06). Data lives in `pipelines/participants/data/`. PDFs under `pipelines/participants/pdfs/`.
+- `pipelines/uitgekochte/` – downstream matching to minfin/FTM/fosfaat, animal counts, charts, and final export. Data lives in `pipelines/uitgekochte/data/`.
+- `final_results/<date>/` – published charts (tracked) and trimmed CSV (git-ignored).
+- `experiments/` – prompt/testing scratch space (unchanged).
+
 ## Repository structure
 
-- `scripts/01_parse_overheid_pages.py` – parse saved overheid.nl HTML or query the official SRU API into `data/01_overheid_results.csv`.
-- `scripts/02_enrich_with_html_and_pdfs.py` – download PDFs/HTML, add `doc_id`, and write `data/02_lbv_enriched.csv`.
-- `scripts/03_extract_pdf_text.py` – fill `TEXT_PDF` for rows that have a local PDF (`data/03_lbv_enriched_with_pdf.csv`).
-- `scripts/04_ai_classify_lbv_and_addresses.py` – call OpenAI to add LBV/LBV+, withdrawal, stage, address metadata, and extract company names when available (`data/04_lbv_enriched_with_ai_summary.csv`).
-- `scripts/05_enrich_addresses.py` – deterministic address cleanup: split multi-number house strings, look up missing postcodes via PDOK, and emit `AddressKey` for grouping (`data/05_lbv_enriched_addresses.csv`).
-- `scripts/06_build_deelnemers.py` – group permit rows into farm-level participants (`data/06_deelnemers_lbv_lbvplus.csv`), carrying `COMPANY_NAME`/`company_id` forward per farm/address.
-- `data/` – numbered CSV checkpoints so it is obvious which step produced each file (e.g., `02_lbv_enriched.csv` came from script 02). See `data/DATA_README.md` for archive/run layout and provenance.
+- `pipelines/participants/scripts/01_parse_overheid_pages.py` – parse saved overheid.nl HTML or query the SRU API into `pipelines/participants/data/01_overheid_results.csv`.
+- `pipelines/participants/scripts/02_enrich_with_html_and_pdfs.py` – download PDFs/HTML, add `doc_id`, and write `pipelines/participants/data/02_lbv_enriched.csv`.
+- `pipelines/participants/scripts/03_extract_pdf_text.py` – fill `TEXT_PDF` for rows that have a local PDF (`pipelines/participants/data/03_lbv_enriched_with_pdf.csv`).
+- `pipelines/participants/scripts/04_ai_classify_lbv_and_addresses.py` – call OpenAI to add LBV/LBV+, withdrawal, stage, address metadata, and extract company names when available (`pipelines/participants/data/04_lbv_enriched_with_ai_summary.csv`).
+- `pipelines/participants/scripts/05_enrich_addresses.py` – deterministic address cleanup: split multi-number house strings, look up missing postcodes via PDOK, and emit `AddressKey` for grouping (`pipelines/participants/data/05_lbv_enriched_addresses.csv`).
+- `pipelines/participants/scripts/06_build_deelnemers.py` – group permit rows into farm-level participants (`pipelines/participants/data/06_deelnemers_lbv_lbvplus.csv`), carrying `COMPANY_NAME`/`company_id` forward per farm/address.
+- `pipelines/participants/data/` – numbered CSV checkpoints; see `pipelines/participants/data/DATA_README.md` for archive/run layout and provenance.
+- `pipelines/uitgekochte/` – downstream matching pipeline (see its README) consuming `06_deelnemers_lbv_lbvplus.csv` and other Woo/minfin datasets.
 - `experiments/llm_improvement_testing/` – scratch space for evaluating stage/address prompts; JSON results retained, CSVs git-ignored. See folder README.
-- `agents.md` – detailed prompt/agent documentation for the LLM steps.
 
 ## Setup
 
@@ -34,34 +40,34 @@ This project pulls government notices about the LBV/LBV+ scheme, extracts text f
    Running without `--mode` will prompt you interactively to pick `local` or `api`.
    - Local HTML export:
      ```
-     python scripts/01_parse_overheid_pages.py --mode local --files provincie1.html provincie2.html --out data/01_overheid_results.csv
+     python pipelines/participants/scripts/01_parse_overheid_pages.py --mode local --files provincie1.html provincie2.html --out pipelines/participants/data/01_overheid_results.csv
      ```
    - Directly via the SRU API (example query for LBV terms):
      ```
-     python scripts/01_parse_overheid_pages.py --mode api --api-query 'c.product-area==officielepublicaties AND cql.textAndIndexes="lbv"' --api-max-records 500
+     python pipelines/participants/scripts/01_parse_overheid_pages.py --mode api --api-query 'c.product-area==officielepublicaties AND cql.textAndIndexes="lbv"' --api-max-records 500
      ```
 2. **Enrich with HTML/PDF context**  
    ```
-   python scripts/02_enrich_with_html_and_pdfs.py --in data/01_overheid_results.csv --out data/02_lbv_enriched.csv
+   python pipelines/participants/scripts/02_enrich_with_html_and_pdfs.py --in pipelines/participants/data/01_overheid_results.csv --out pipelines/participants/data/02_lbv_enriched.csv
    ```
 3. **Extract PDF text**  
-   Run `python scripts/03_extract_pdf_text.py` to pull readable text from PDFs into `data/03_lbv_enriched_with_pdf.csv`.
+   Run `python pipelines/participants/scripts/03_extract_pdf_text.py` to pull readable text from PDFs into `pipelines/participants/data/03_lbv_enriched_with_pdf.csv`.
 4. **LLM classification**  
-   Ensure `.env` exists, set `DEFAULT_MODEL` or basenames in `scripts/04_ai_classify_lbv_and_addresses.py`, then run it to generate `data/04_lbv_enriched_with_ai_summary.csv`.
+   Ensure `.env` exists (repo root), set `DEFAULT_MODEL` or basenames in `pipelines/participants/scripts/04_ai_classify_lbv_and_addresses.py`, then run it to generate `pipelines/participants/data/04_lbv_enriched_with_ai_summary.csv`.
 5. **Address enrichment**  
-   `python scripts/05_enrich_addresses.py --input data/04_lbv_enriched_with_ai_summary.csv --output data/05_lbv_enriched_addresses.csv`  
+   `python pipelines/participants/scripts/05_enrich_addresses.py --input pipelines/participants/data/04_lbv_enriched_with_ai_summary.csv --output pipelines/participants/data/05_lbv_enriched_addresses.csv`  
    Splits multi-number houses, fills missing postcodes via PDOK, and adds `AddressKey` used for grouping.
 6. **Aggregate participants**  
-   `python scripts/06_build_deelnemers.py --input data/05_lbv_enriched_addresses.csv --output data/06_deelnemers_lbv_lbvplus.csv`  
-   Step 06 now reads the step-05 output directly. The legacy `06_vergunningen_lbv_lbvplus.csv` lives only in `data/archive/2025-11-25/` for reference.
+   `python pipelines/participants/scripts/06_build_deelnemers.py --input pipelines/participants/data/05_lbv_enriched_addresses.csv --output pipelines/participants/data/06_deelnemers_lbv_lbvplus.csv`  
+   Step 06 now reads the step-05 output directly. The legacy `06_vergunningen_lbv_lbvplus.csv` lives only in `pipelines/participants/data/archive/2025-11-25/` for reference.
 
 ### Uitgekochte boeren (second-stage pipeline)
-- `scripts/run_all.sh` now also syncs the step-06 output to `uitgekochte_boeren_analyseren/data/raw/06_deelnemers_lbv_lbvplus.csv` so the downstream matching pipeline can run without manual copying.
-- Run the second-stage scripts from `uitgekochte_boeren_analyseren/scripts/` (see its README) after supplying the other required raw files (`minfin_dataset.csv`, `FTM_*`, fosfaat).
-- After generating `master_permits.csv` and charts, run `python3 uitgekochte_boeren_analyseren/scripts/13_export_final_results.py` to export a slimmed `farms_permits_minfin_<date>.csv` and chart overviews into `final_results/<YYYY_MM_DD>/` with dated filenames for each scrape run.
+- `pipelines/participants/scripts/run_all.sh` syncs the step-06 output to `pipelines/uitgekochte/data/raw/06_deelnemers_lbv_lbvplus.csv` so the downstream matching pipeline can run without manual copying.
+- Run the second-stage scripts from `pipelines/uitgekochte/scripts/` (see its README) after supplying the other required raw files (`minfin_dataset.csv`, `FTM_*`, fosfaat).
+- After generating `master_permits.csv` and charts, run `python3 pipelines/uitgekochte/scripts/13_export_final_results.py` to export a slimmed `farms_permits_minfin_<date>.csv` and chart overviews into `final_results/<YYYY_MM_DD>/` with dated filenames for each scrape run.
 
 ### Outputs & sharing
-- Intermediate CSVs stay in `data/` (git-ignored).
+- Intermediate CSVs stay in `pipelines/participants/data/` and `pipelines/uitgekochte/data/` (git-ignored).
 - Final shareable artifacts: `final_results/<date>/chart_all_<date>.png`, `charts_overview_<date>.pdf`, and `farms_permits_minfin_<date>.csv` (CSV is git-ignored; charts can be committed).
 
 ### Data sources
@@ -76,40 +82,40 @@ This project pulls government notices about the LBV/LBV+ scheme, extracts text f
 Once you have a `.env` with `OPENAI_API_KEY`, you can run the full pipeline (including regeneration of `province_stage_irrevocable.csv`) in one go:
 
 ```bash
-bash scripts/run_all.sh
+bash pipelines/participants/scripts/run_all.sh
 ```
 
 Step 01 input options (set as env vars when invoking):
-- Local HTML exports: `MODE=local FILES="prov1.html prov2.html" bash scripts/run_all.sh`
-- Direct SRU API: `MODE=api API_QUERY='c.product-area==officielepublicaties AND cql.textAndIndexes=\"lbv\"' API_MAX=500 bash scripts/run_all.sh`
+- Local HTML exports: `MODE=local FILES="prov1.html prov2.html" bash pipelines/participants/scripts/run_all.sh`
+- Direct SRU API: `MODE=api API_QUERY='c.product-area==officielepublicaties AND cql.textAndIndexes=\"lbv\"' API_MAX=500 bash pipelines/participants/scripts/run_all.sh`
 
-If `data/01_overheid_results.csv` already exists, step 01 is skipped unless you force it with `RUN_STEP1=1`. The script stops early if prerequisites are missing.
-At the end, the script also copies the latest participants file to the repo root as `deelnemers_lbv_lbvplus_YYYY_MM_DD.csv` for convenient sharing while keeping the big CSVs under `data/` (git-ignored).
+If `pipelines/participants/data/01_overheid_results.csv` already exists, step 01 is skipped unless you force it with `RUN_STEP1=1`. The script stops early if prerequisites are missing.
+At the end, the script also copies the latest participants file to the repo root as `deelnemers_lbv_lbvplus_YYYY_MM_DD.csv` for convenient sharing while keeping the big CSVs under `pipelines/participants/data/` (git-ignored).
 
 ## Step-by-step detail (what each script does)
 
 - **01_parse_overheid_pages.py**  
   Input: either local HTML exports (from zoek.officielebekendmakingen.nl) or a SRU API query.  
-  Output: `data/01_overheid_results.csv` with raw publication info (title, date, URLs, government body). No AI yet.
+  Output: `pipelines/participants/data/01_overheid_results.csv` with raw publication info (title, date, URLs, government body). No AI yet.
 
 - **02_enrich_with_html_and_pdfs.py**  
-  Saves the HTML/PDF files locally, gives each row a `doc_id`, and combines the text into `TEXT_HTML` and `TEXT_PDF`. Produces `data/02_lbv_enriched.csv`; later steps build on this file.
+  Saves the HTML/PDF files locally, gives each row a `doc_id`, and combines the text into `TEXT_HTML` and `TEXT_PDF`. Produces `pipelines/participants/data/02_lbv_enriched.csv`; later steps build on this file.
 
 - **03_extract_pdf_text.py**  
-  Fills in `TEXT_PDF` by reading the PDFs when that column is still empty, yielding `data/03_lbv_enriched_with_pdf.csv`. The HTML text stays in place so the AI sees both sources.
+  Fills in `TEXT_PDF` by reading the PDFs when that column is still empty, yielding `pipelines/participants/data/03_lbv_enriched_with_pdf.csv`. The HTML text stays in place so the AI sees both sources.
 
 - **04_ai_classify_lbv_and_addresses.py**  
   Combines `TEXT_HTML` + `TEXT_PDF` and asks the AI (default `gpt-4.1-mini`) to:  
   - spot LBV/LBV+ relevance and withdrawal scope,  
   - decide the stage (receipt, draft, definitive) using conservative Dutch rules,  
   - pull out the main farm address (street/number/suffix/postcode/place) with a confidence score.  
-  Output: `data/04_lbv_enriched_with_ai_summary.csv` with stage, LBV fields, address fields, confidences, and source notes.
+  Output: `pipelines/participants/data/04_lbv_enriched_with_ai_summary.csv` with stage, LBV fields, address fields, confidences, and source notes.
 
 - **05_enrich_addresses.py**  
-  Rule-based cleanup after the AI: split house numbers like “7-9”, look up missing postcodes via PDOK, tidy the address, and build `AddressKey` for grouping. Output: `data/05_lbv_enriched_addresses.csv`.
+  Rule-based cleanup after the AI: split house numbers like “7-9”, look up missing postcodes via PDOK, tidy the address, and build `AddressKey` for grouping. Output: `pipelines/participants/data/05_lbv_enriched_addresses.csv`.
 
 - **06_build_deelnemers.py**  
-  Groups publications that share an `AddressKey` into farm-level records, assigns stable `farm_id`s, and keeps the latest publication per farm. Adds both `stage_latest_llm` and an empty `stage_latest_manual` column for anyone who wants to override the AI. Output: `data/06_deelnemers_lbv_lbvplus.csv`, which also feeds the province counts.
+  Groups publications that share an `AddressKey` into farm-level records, assigns stable `farm_id`s, and keeps the latest publication per farm. Adds both `stage_latest_llm` and an empty `stage_latest_manual` column for anyone who wants to override the AI. Output: `pipelines/participants/data/06_deelnemers_lbv_lbvplus.csv`, which also feeds the province counts.
 
 ## LLM stage/address method (step 04) and quality checks
 

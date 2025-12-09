@@ -1,15 +1,23 @@
-pdfs/
 .DS_Store
 .env
-data/archive/
-data/runs/
-experiments/llm_improvement_testing/*.csv
 __pycache__/
-data/*.csv
-deelnemers_lbv_lbvplus_*.csv
+experiments/llm_improvement_testing/*.csv
+
+# Participants pipeline
+pipelines/participants/pdfs/
+pipelines/participants/data/archive/
+pipelines/participants/data/runs/
+pipelines/participants/data/*.csv
+pipelines/participants/data/**/*.csv
+pipelines/participants/deelnemers_lbv_lbvplus_*.csv
+
+# Uitgekochte pipeline
+pipelines/uitgekochte/data/raw/*.csv
+pipelines/uitgekochte/data/processed/*.csv
+pipelines/uitgekochte/data/raw/.~lock.*
+pipelines/uitgekochte/data/processed/charts/*
+pipelines/uitgekochte/data/processed/*.pdf
+
+# Final outputs (CSV only; charts are tracked)
 final_results/**/*.csv
-uitgekochte_boeren_analyseren/data/raw/*.csv
-uitgekochte_boeren_analyseren/data/processed/*.csv
-uitgekochte_boeren_analyseren/data/raw/.~lock.*
-uitgekochte_boeren_analyseren/data/processed/charts/*
-uitgekochte_boeren_analyseren/data/processed/*.pdf
+deelnemers_lbv_lbvplus_*.csv

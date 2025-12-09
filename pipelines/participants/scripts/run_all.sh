@@ -10,8 +10,10 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
+# Pipeline root (participants) and repo root
+PIPE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$PIPE_ROOT/../.." && pwd)"
+cd "$PIPE_ROOT"
 
 PYTHON="${PYTHON:-python3}"
 MODE="${MODE:-}"
@@ -25,8 +27,8 @@ die() { printf "\\n[error] %s\\n" "$*" >&2; exit 1; }
 
 # Basic checks
 [ -x "$(command -v "$PYTHON")" ] || die "python3 not found"
-[ -f ".env" ] || die "Missing .env (must define OPENAI_API_KEY for step 04)"
-grep -q "OPENAI_API_KEY" .env || die "OPENAI_API_KEY not found in .env"
+[ -f "$REPO_ROOT/.env" ] || die "Missing .env at repo root (must define OPENAI_API_KEY for step 04)"
+grep -q "OPENAI_API_KEY" "$REPO_ROOT/.env" || die "OPENAI_API_KEY not found in $REPO_ROOT/.env"
 mkdir -p data
 
 maybe_step1() {
@@ -94,7 +96,7 @@ info "Step 06: aggregate participants"
 
 info "Step 06c: copy definitive participants to repo root with date stamp"
 DATE_TAG="$(date +%Y_%m_%d)"
-DEST="deelnemers_lbv_lbvplus_${DATE_TAG}.csv"
+DEST="$REPO_ROOT/deelnemers_lbv_lbvplus_${DATE_TAG}.csv"
 cp data/06_deelnemers_lbv_lbvplus.csv "$DEST"
 info "Wrote $DEST"
 
@@ -150,7 +152,7 @@ print(f"[info] Wrote data/province_stage_irrevocable.csv (cutoff {cutoff})")
 PY
 
 info "Step 07: sync participants to uitgekochte_boeren_analyseren/data/raw"
-DEST_DIR="uitgekochte_boeren_analyseren/data/raw"
+DEST_DIR="$REPO_ROOT/pipelines/uitgekochte/data/raw"
 mkdir -p "$DEST_DIR"
 cp data/06_deelnemers_lbv_lbvplus.csv "$DEST_DIR/06_deelnemers_lbv_lbvplus.csv"
 info "Synced to $DEST_DIR/06_deelnemers_lbv_lbvplus.csv for the downstream uitgekochte pipeline"
