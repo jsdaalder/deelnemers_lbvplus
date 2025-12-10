@@ -146,7 +146,7 @@ def plot_charts(master: pd.DataFrame, output_dir: Path, year: str = "2022") -> N
 
     farms_by_method = master.assign(link_method=master["link_method"].fillna("")).loc[:, ["farm_id", "link_method"]].drop_duplicates()
     # Deduplicate per farm with a priority order so counts sum to the unique farm total.
-    priority = ["permit_adres", "permit_kvk_adres", "minfin_kvk_adres", "fosfaat_adres", "niet_gelinkt"]
+    priority = ["permit_adres", "permit_kvk_adres", "minfin_kvk_adres", "fosfaat_adres", "linked_via_rel", "niet_gelinkt"]
     def pick_method(group):
         for p in priority:
             if p in set(group["link_method"]):
