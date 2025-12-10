@@ -22,22 +22,27 @@ Repo layout (two pipelines):
    - Run its scripts in order (see `pipelines/matching_and_analysis/README.md`).  
    - Export final deliverables: `python3 pipelines/matching_and_analysis/scripts/13_export_final_results.py` → `final_results/<date>/` (charts tracked, CSV ignored).
 
-## Participants pipeline (what each step does)
-- `01_parse_overheid_pages.py` – scrape or SRU API → `01_overheid_results.csv`.
-- `02_enrich_with_html_and_pdfs.py` – download HTML/PDF, add `doc_id`, merge text → `02_lbv_enriched.csv`.
-- `03_extract_pdf_text.py` – fill `TEXT_PDF` from local PDFs → `03_lbv_enriched_with_pdf.csv`.
-- `04_ai_classify_lbv_and_addresses.py` – LLM adds LBV/LBV+, withdrawal scope, stage, address, company names → `04_lbv_enriched_with_ai_summary.csv`.
-- `05_enrich_addresses.py` – rule-based cleanup and `AddressKey` → `05_lbv_enriched_addresses.csv`.
-- `06_build_deelnemers.py` – group by address into farms, keep latest stage → `06_deelnemers_lbv_lbvplus.csv`.
+## Participants pipeline (step details)
+- **01_parse_overheid_pages.py** – scrape zoek.officielebekendmakingen.nl HTML or SRU API; normalize dates/URLs → `01_overheid_results.csv`.
+- **02_enrich_with_html_and_pdfs.py** – download HTML/PDF, assign `doc_id`, store raw text (`TEXT_HTML`, `LOCAL_PDF_PATH`) → `02_lbv_enriched.csv`.
+- **03_extract_pdf_text.py** – pull text from local PDFs into `TEXT_PDF` (keeps HTML text) → `03_lbv_enriched_with_pdf.csv`.
+- **04_ai_classify_lbv_and_addresses.py** – concatenates HTML+PDF text and asks the LLM (default `gpt-4.1-mini`) for LBV/LBV+ flag, withdrawal scope, stage (receipt/draft/definitive), main address (street/number/suffix/postcode/place), confidences, and company name (for Noord-Brabant). Uses conservative Dutch prompts; draft wins over definitive if both appear. Outputs `04_lbv_enriched_with_ai_summary.csv`. Quality: refined prompt had 1 mismatch on 343 labeled rows; addresses matched all reviewed rows (see `experiments/llm_improvement_testing`).
+- **05_enrich_addresses.py** – rule-based cleanup: split number ranges, fill postcodes via PDOK when available, build `AddressKey` for grouping → `05_lbv_enriched_addresses.csv`.
+- **06_build_deelnemers.py** – group publications by `AddressKey` into farms (`farm_id`), keep latest stage, expose `stage_latest_manual` for overrides → `06_deelnemers_lbv_lbvplus.csv` (also copied to repo root with date tag).
 
-### LLM stage/address step (transparency)
-- Prompting: `pipelines/participants/scripts/04_ai_classify_lbv_and_addresses.py` concatenates `TEXT_HTML` + `TEXT_PDF` and asks the model (default `gpt-4.1-mini`) for LBV/LBV+ status, withdrawal scope, stage (receipt/draft/definitive), and primary address with confidences. Prompts are Dutch and conservative; draft wording wins over definitive when both appear.
-- Quality checks: 343 manually labeled publications show 1 mismatch with the refined prompt (see `experiments/llm_improvement_testing/stage_run_results.json` and `mismatches_latest.csv`). Address extraction matched all reviewed rows.
-- Safeguards: stage defaults to conservative rules; `stage_latest_manual` lets you override later; address post-processing handles missing/ambiguous postcodes with PDOK (when network is available).
-
-## Matching & analysis pipeline (summary)
-- Consumes the participants CSV plus minfin/FTM/fosfaat datasets.
-- KVK lookups for minfin and permits, overlap checks, address matches to FTM animal counts, fosfaat name fallback, master table build, charts, and final export (`farms_permits_minfin_<date>.csv` + chart overviews in `final_results/<date>/`). See `pipelines/matching_and_analysis/README.md` for step-by-step commands.
+## Matching & analysis pipeline (step details)
+- **Matching (pipelines/matching_and_analysis/matching/)**  
+  01 Combine FTM animals+addresses → `01_FTM_animals_with_addresses.csv`  
+  02 KVK lookup minfin → `03_kvk_minfin_results.csv`  
+  03 KVK lookup permits → `02_kvk_results.csv`  
+  04 Overlap permits/minfin by KVK → `04_overlap_summary.csv`  
+  05/06 Address match permits/minfin to FTM → `04_*_animals_join.csv`/summaries  
+  07 Fosfaat prep (2015 crosswalk) → `05_fosfaat_rel_crosswalk.csv`  
+  08 Fosfaat name fallback for permits → `07_permit_fosfaat_name_matches.csv`  
+  09 Build master table → `master_permits.csv`
+- **Analysis (pipelines/matching_and_analysis/analysis/)**  
+  10 Generate charts → `data/processed/charts/`  
+  13 Export final deliverables (slim `farms_permits_minfin_<date>.csv` + chart overviews) → `final_results/<date>/`
 
 ## Outputs & sharing
 - Intermediate CSVs live under each pipeline’s `data/` (git-ignored).
