@@ -145,7 +145,19 @@ def plot_charts(master: pd.DataFrame, output_dir: Path, year: str = "2022") -> N
     )
 
     farms_by_method = master.assign(link_method=master["link_method"].fillna("")).loc[:, ["farm_id", "link_method"]].drop_duplicates()
-    methods = farms_by_method.groupby("link_method")["farm_id"].nunique()
+    # Deduplicate per farm with a priority order so counts sum to the unique farm total.
+    priority = ["permit_adres", "permit_kvk_adres", "minfin_kvk_adres", "fosfaat_adres", "niet_gelinkt"]
+    def pick_method(group):
+        for p in priority:
+            if p in set(group["link_method"]):
+                return p
+        # fallback: first non-empty or empty
+        for val in group["link_method"]:
+            if val:
+                return val
+        return ""
+    method_per_farm = farms_by_method.groupby("farm_id").apply(pick_method)
+    methods = method_per_farm.value_counts()
     slices = [
         ("Permit adres", methods.get("permit_adres", 0), summary_blue),
         ("Permit KVK-adres", methods.get("permit_kvk_adres", 0), "#6FA8DC"),
