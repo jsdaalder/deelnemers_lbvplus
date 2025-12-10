@@ -412,6 +412,12 @@ def main() -> None:
         r["lbv_plus_tot_dep"] = c.get("lbv_plus_tot_dep", r.get("lbv_plus_tot_dep", ""))
         r["lbv_plus_rank"] = c.get("lbv_plus_rank", r.get("lbv_plus_rank", ""))
 
+    # If rel_anoniem is present but link_method is empty or niet_gelinkt, mark as linked_via_rel for consistency
+    for r in enriched:
+        lm = (r.get("link_method") or "").strip()
+        if (not lm or lm == METHOD_UNLINKED) and r.get("rel_anoniem"):
+            r["link_method"] = "linked_via_rel"
+
     write_csv(args.output, enriched, base_fieldnames)
     print(f"Wrote master table with {len(enriched)} rows to {args.output}")
 
