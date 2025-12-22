@@ -317,16 +317,13 @@ def filter_by_province(df: pd.DataFrame, province: str) -> pd.DataFrame:
 
 
 def attach_province(df: pd.DataFrame, place_to_province: dict[str, str]) -> pd.DataFrame:
-    """Fill Province using woonplaatsen list if missing."""
-    if "Province" not in df.columns and not place_to_province:
+    """Set Province strictly from woonplaatsen map; ignore any existing value."""
+    if not place_to_province:
         return df
 
     place_cols = ["B_PLAATS", "kvk_api_plaats"]
 
     def resolve(row) -> str:
-        existing = row.get("Province", "")
-        if pd.notna(existing) and str(existing).strip():
-            return existing
         for col in place_cols:
             if col not in row:
                 continue
