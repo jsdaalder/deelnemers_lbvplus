@@ -151,10 +151,12 @@ print(out)
 print(f"[info] Wrote data/province_stage_irrevocable.csv (cutoff {cutoff})")
 PY
 
-info "Step 07: sync participants to matching_and_analysis/data/raw"
-DEST_DIR="$REPO_ROOT/pipelines/matching_and_analysis/data/raw"
-mkdir -p "$DEST_DIR"
-cp data/06_deelnemers_lbv_lbvplus.csv "$DEST_DIR/06_deelnemers_lbv_lbvplus.csv"
-info "Synced to $DEST_DIR/06_deelnemers_lbv_lbvplus.csv for the downstream matching/analysis pipeline"
+info "Step 07: sync participants to matching pipelines"
+DEST_DIR_FTM="$REPO_ROOT/pipelines/matching_ftm/data/raw"
+DEST_DIR_NRC="$REPO_ROOT/pipelines/matching_nrc/data/raw"
+mkdir -p "$DEST_DIR_FTM" "$DEST_DIR_NRC"
+cp data/06_deelnemers_lbv_lbvplus.csv "$DEST_DIR_FTM/06_deelnemers_lbv_lbvplus.csv"
+cp data/06_deelnemers_lbv_lbvplus.csv "$DEST_DIR_NRC/06_deelnemers_lbv_lbvplus.csv"
+info "Synced to $DEST_DIR_FTM/06_deelnemers_lbv_lbvplus.csv and $DEST_DIR_NRC/06_deelnemers_lbv_lbvplus.csv for downstream matching pipelines"
 
 info "Pipeline complete"

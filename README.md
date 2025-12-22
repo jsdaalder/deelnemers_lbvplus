@@ -2,9 +2,11 @@
 
 This project pulls government notices about the LBV/LBV+ scheme, extracts text from attached PDFs, asks an LLM to identify the stage and address, cleans the data, and groups publications into farms. A second stage matches those farms to other sources (minfin, animal counts) and produces charts. Final shareable results (charts plus a trimmed CSV) live under `final_results/<date>/`.
 
-Repo layout (two pipelines):
+Repo layout:
 - `pipelines/participants/` – LBV/LBV+ scraping + LLM classification + address cleanup + farm aggregation (steps 01–06). Data lives in `pipelines/participants/data/`. PDFs under `pipelines/participants/pdfs/`.
-- `pipelines/matching_and_analysis/` – downstream matching to minfin/FTM/fosfaat, animal counts, charts, and final export. Data lives in `pipelines/matching_and_analysis/data/`.
+- `pipelines/matching_ftm/` – match participants and minfin to FTM (farm-level) animals/addresses, fosfaat fallback, and build master tables. Data in `pipelines/matching_ftm/data/`.
+- `pipelines/matching_nrc/` – match participants and minfin to NRC WOO barn-level animals dataset (one row per barn, company id column). Data in `pipelines/matching_nrc/data/`.
+- `analysis/` – reporting scripts (currently FTM-focused) that read processed outputs and produce charts/exports. Charts write to dated folders under `analysis/ftm/charts/<YYYY_MM_DD>/` (local-only; git-ignored).
 - `final_results/<date>/` – published charts (tracked) and trimmed CSV (git-ignored).
 - `experiments/` – prompt/testing scratch space (unchanged).
 
@@ -17,10 +19,14 @@ Repo layout (two pipelines):
    - Inputs: `MODE=local FILES="prov1.html prov2.html"` **or** `MODE=api API_QUERY='c.product-area==officielepublicaties AND cql.textAndIndexes="lbv"' API_MAX=500`.  
    - Outputs land in `pipelines/participants/data/` and a dated copy `deelnemers_lbv_lbvplus_<date>.csv` at repo root. The run_all script also syncs the step-06 output to the matching/analysis pipeline.
 
-3) **Matching & analysis pipeline**  
-   - Requires `pipelines/matching_and_analysis/data/raw/06_deelnemers_lbv_lbvplus.csv` (auto-synced by step 2) plus other raw files (`minfin_dataset.csv`, `FTM_*`, fosfaat).  
-   - Run its scripts in order (see `pipelines/matching_and_analysis/README.md`).  
-   - Export final deliverables: `python3 pipelines/matching_and_analysis/scripts/13_export_final_results.py` → `final_results/<date>/` (charts tracked, CSV ignored).
+3) **Matching (FTM) pipeline**  
+   - Requires `pipelines/matching_ftm/data/raw/06_deelnemers_lbv_lbvplus.csv` (auto-synced by step 2) plus other raw files (`minfin_dataset.csv`, `FTM_*`, fosfaat).  
+   - Run matching scripts in order (see `pipelines/matching_ftm/README.md`).  
+   - Charts/exports: use `analysis/ftm/14_generate_charts.py` (charts to `analysis/ftm/charts/<date>/`, not committed) and `analysis/ftm/13_export_final_results.py` (slim CSV + chart overview to `final_results/<date>/`). `analysis/ftm/10_generate_report.py` is legacy PDF/png charting.
+
+4) **Matching (NRC) pipeline**  
+   - Uses NRC barn-level animal counts; requires the participants CSV (synced by step 2) and NRC raw files in `pipelines/matching_nrc/data/raw/`.  
+   - See `pipelines/matching_nrc/README.md` for workbook content and helper scripts.
 
 ## Participants pipeline (step details)
 - **01_parse_overheid_pages.py** – scrape zoek.officielebekendmakingen.nl HTML or SRU API; normalize dates/URLs → `01_overheid_results.csv`.
@@ -30,8 +36,8 @@ Repo layout (two pipelines):
 - **05_enrich_addresses.py** – rule-based cleanup: split number ranges, fill postcodes via PDOK when available, build `AddressKey` for grouping → `05_lbv_enriched_addresses.csv`.
 - **06_build_deelnemers.py** – group publications by `AddressKey` into farms (`farm_id`), keep latest stage, expose `stage_latest_manual` for overrides → `06_deelnemers_lbv_lbvplus.csv` (also copied to repo root with date tag).
 
-## Matching & analysis pipeline (step details)
-- **Matching (pipelines/matching_and_analysis/matching/)**  
+## Matching (FTM) pipeline (step details)
+- **Matching (pipelines/matching_ftm/scripts/)**  
   01 Combine FTM animals+addresses → `01_FTM_animals_with_addresses.csv`  
   02 KVK lookup minfin → `03_kvk_minfin_results.csv`  
   03 KVK lookup permits → `02_kvk_results.csv`  
@@ -40,13 +46,14 @@ Repo layout (two pipelines):
   07 Fosfaat prep (2015 crosswalk) → `05_fosfaat_rel_crosswalk.csv`  
   08 Fosfaat name fallback for permits → `07_permit_fosfaat_name_matches.csv`  
   09 Build master table → `master_permits.csv`
-- **Analysis (pipelines/matching_and_analysis/analysis/)**  
-  10 Generate charts → `data/processed/charts/`  
+- **Analysis (analysis/ftm/)**  
+  10 Generate charts → `analysis/ftm/charts/<YYYY_MM_DD>/` (local; git-ignored)  
   13 Export final deliverables (slim `farms_permits_minfin_<date>.csv` + chart overviews) → `final_results/<date>/`
 
 ## Outputs & sharing
 - Intermediate CSVs live under each pipeline’s `data/` (git-ignored).
-- Final shareables: `final_results/<date>/chart_all_<date>.png`, `charts_overview_<date>.pdf`, `farms_permits_minfin_<date>.csv` (CSV is ignored; charts can be committed).
+- Charts are generated under `analysis/ftm/charts/<YYYY_MM_DD>/` (local-only; not committed).
+- Final shareables: `final_results/<date>/chart_all_<date>.png`, `charts_overview_<date>.pdf`, `farms_permits_minfin_<date>.csv` (CSV is git-ignored; charts can be committed).
 
 ## Data sources
 - LBV/LBV+ publications: scraped from officielebekendmakingen.nl (scraper by Follow the Money) → LLM pipeline.

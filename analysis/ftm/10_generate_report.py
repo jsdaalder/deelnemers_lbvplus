@@ -9,8 +9,9 @@ from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.ticker import FuncFormatter
 import pandas as pd
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-PROCESSED_DIR = REPO_ROOT / "data" / "processed"
+REPO_ROOT = Path(__file__).resolve().parents[2]  # repo root
+PIPE_ROOT = REPO_ROOT / "pipelines" / "matching_ftm"
+PROCESSED_DIR = PIPE_ROOT / "data" / "processed"
 
 
 def category_from_row(row: pd.Series) -> str:

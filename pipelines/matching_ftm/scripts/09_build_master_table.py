@@ -6,8 +6,9 @@ import csv
 from pathlib import Path
 from typing import Dict, Iterable, List, Set
 import re
+from collections import defaultdict
 
-PIPE_ROOT = Path(__file__).resolve().parents[1]  # pipelines/matching_and_analysis
+PIPE_ROOT = Path(__file__).resolve().parents[1]  # pipelines/matching_ftm
 RAW_DIR = PIPE_ROOT / "data" / "raw"
 PROCESSED_DIR = PIPE_ROOT / "data" / "processed"
 
@@ -77,6 +78,32 @@ def load_kvk_results(path: Path) -> Dict[str, dict]:
     return hits
 
 
+def aggregate_animals(rows: List[dict]) -> List[dict]:
+    """Collapse duplicate animal rows per farm/rel/rav/year, summing counts."""
+    if not rows:
+        return []
+    key_fields = ["farm_id", "rel_anoniem", "rav_code", "jaar", "gem_jaar"]
+    sum_fields = ["gem_aantal_dieren"]
+    grouped: Dict[tuple, dict] = {}
+    for r in rows:
+        key = tuple(r.get(f, "") for f in key_fields)
+        if key not in grouped:
+            grouped[key] = dict(r)
+            for sf in sum_fields:
+                grouped[key][sf] = float(r.get(sf, "") or 0)
+        else:
+            for sf in sum_fields:
+                grouped[key][sf] = float(grouped[key].get(sf, 0) or 0) + float(r.get(sf, "") or 0)
+    # Coerce summed fields back to string/stripped
+    for g in grouped.values():
+        for sf in sum_fields:
+            if sf in g:
+                val = g[sf]
+                # keep integers without .0
+                g[sf] = int(val) if float(val).is_integer() else val
+    return list(grouped.values())
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build master table with animals, permit/minfin metadata, fosfaat KVK/Naam, and name-match flags."
@@ -106,10 +133,22 @@ def parse_args() -> argparse.Namespace:
         help="Name-based matches (for flagging).",
     )
     parser.add_argument(
-        "--output",
+        "--output-permits",
         type=Path,
         default=MASTER_PATH,
-        help="Output master table path.",
+        help="Output master table path (permit rows only).",
+    )
+    parser.add_argument(
+        "--output-minfin",
+        type=Path,
+        default=PROCESSED_DIR / "master_voorschotten.csv",
+        help="Output table path for MinFin-only rows.",
+    )
+    parser.add_argument(
+        "--output-participants",
+        type=Path,
+        default=PROCESSED_DIR / "master_participants.csv",
+        help="Merged participants (permit + minfin, with canonical farm_ids).",
     )
     parser.add_argument(
         "--kvk-results",
@@ -181,8 +220,10 @@ def main() -> None:
     permit_rows = read_csv(RAW_DIR / "06_deelnemers_lbv_lbvplus.csv")
     join_rows_all = read_csv(args.join)
     join_rows = [r for r in join_rows_all if r.get("jaar") == args.year]
+    join_rows = aggregate_animals(join_rows)
     minfin_join_all = read_csv(args.minfin_join) if args.minfin_join.exists() else []
     minfin_join = [r for r in minfin_join_all if r.get("jaar") == args.year]
+    minfin_join = aggregate_animals(minfin_join)
     crosswalk = load_crosswalk(args.crosswalk)
     clusters = load_clusters(args.cluster)
     # map normalized fos naam to crosswalk row for fallback
@@ -251,7 +292,8 @@ def main() -> None:
     # track address-based rels for overlap decisions
     permit_address_rels = {r.get("rel_anoniem", "") for r in join_rows if r.get("rel_anoniem")}
 
-    enriched: List[dict] = []
+    enriched_permits: List[dict] = []
+    enriched_minfin: List[dict] = []
     # Permit-derived rows
     for permit in permit_rows:
         fid = permit.get("farm_id", "")
@@ -314,7 +356,7 @@ def main() -> None:
                                 row[f] = ftm[f]
                         row["rel_anoniem"] = ftm.get("rel_anoniem", "")
                         row["link_method"] = METHOD_PERMIT_KVK_ADDRESS
-            enriched.append(row)
+            enriched_permits.append(row)
             continue
         for match in matches:
             row = {k: "" for k in base_fieldnames}
@@ -351,7 +393,7 @@ def main() -> None:
                     row["link_method"] = METHOD_PERMIT_KVK_ADDRESS
                 else:
                     row["link_method"] = METHOD_UNLINKED
-            enriched.append(row)
+            enriched_permits.append(row)
 
     # MinFin-derived rows
     for m in minfin_join:
@@ -395,10 +437,10 @@ def main() -> None:
                         linked = True
             if not linked:
                 row["link_method"] = METHOD_UNLINKED
-        enriched.append(row)
+        enriched_minfin.append(row)
 
     # attach cluster info if available
-    for r in enriched:
+    for r in enriched_permits + enriched_minfin:
         c = clusters.get(r.get("farm_id", ""))
         if not c:
             continue
@@ -413,13 +455,56 @@ def main() -> None:
         r["lbv_plus_rank"] = c.get("lbv_plus_rank", r.get("lbv_plus_rank", ""))
 
     # If rel_anoniem is present but link_method is empty or niet_gelinkt, mark as linked_via_rel for consistency
-    for r in enriched:
+    for r in enriched_permits + enriched_minfin:
         lm = (r.get("link_method") or "").strip()
         if (not lm or lm == METHOD_UNLINKED) and r.get("rel_anoniem"):
             r["link_method"] = "linked_via_rel"
 
-    write_csv(args.output, enriched, base_fieldnames)
-    print(f"Wrote master table with {len(enriched)} rows to {args.output}")
+    # Canonical rel->permit farm_id map
+    rel_to_permit_farm = {}
+    for r in enriched_permits:
+        rel = r.get("rel_anoniem", "")
+        fid = r.get("farm_id", "")
+        if rel and fid and rel not in rel_to_permit_farm:
+            rel_to_permit_farm[rel] = fid
+
+    # Adjust minfin farm_ids when overlapping rel exists in permits
+    for r in enriched_minfin:
+        rel = r.get("rel_anoniem", "")
+        if rel and rel in rel_to_permit_farm:
+            r["farm_id"] = rel_to_permit_farm[rel]
+
+    # Participants merged with canonical farm_ids and de-duplication
+    participant_rows: List[dict] = []
+    seen_keys = set()
+    def add_row(row: dict) -> None:
+        key = (
+            row.get("farm_id", ""),
+            row.get("rel_anoniem", ""),
+            row.get("source", ""),
+            row.get("rav_code", ""),
+            row.get("jaar", ""),
+            row.get("gem_jaar", ""),
+            row.get("normalized_address_key", ""),
+        )
+        if key in seen_keys:
+            return
+        seen_keys.add(key)
+        participant_rows.append(row)
+
+    for r in enriched_permits:
+        add_row(r)
+    for r in enriched_minfin:
+        add_row(r)
+
+    write_csv(args.output_permits, enriched_permits, base_fieldnames)
+    write_csv(args.output_minfin, enriched_minfin, base_fieldnames)
+    write_csv(args.output_participants, participant_rows, base_fieldnames)
+    print(
+        f"Wrote master tables: permits={len(enriched_permits)} -> {args.output_permits}, "
+        f"minfin={len(enriched_minfin)} -> {args.output_minfin}, "
+        f"participants={len(participant_rows)} -> {args.output_participants}"
+    )
 
 
 if __name__ == "__main__":

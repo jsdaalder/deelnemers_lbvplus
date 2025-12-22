@@ -3,6 +3,12 @@
 __pycache__/
 experiments/llm_improvement_testing/*.csv
 
+# Global data/media (only keep charts in final_results)
+*.csv
+*.png
+!final_results/**/*.png
+**/.~lock.*
+
 # Participants pipeline
 pipelines/participants/pdfs/
 pipelines/participants/data/archive/
@@ -21,3 +27,13 @@ pipelines/matching_and_analysis/data/processed/*.pdf
 # Final outputs (CSV only; charts are tracked)
 final_results/**/*.csv
 deelnemers_lbv_lbvplus_*.csv
+
+# Analysis outputs
+analysis/ftm/charts/
+
+# Matching pipelines (data/caches/artifacts)
+pipelines/matching_ftm/data/
+pipelines/matching_nrc/data/
+pipelines/matching_nrc/.cache/
+pipelines/matching_nrc/.mplconfig/
+pipelines/matching_nrc/figures/

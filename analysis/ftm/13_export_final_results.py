@@ -8,13 +8,15 @@ import shutil
 
 import pandas as pd
 
-PIPE_ROOT = Path(__file__).resolve().parents[1]  # pipelines/matching_and_analysis
-REPO_ROOT = Path(__file__).resolve().parents[3]  # repo root
+REPO_ROOT = Path(__file__).resolve().parents[2]  # repo root
+PIPE_ROOT = REPO_ROOT / "pipelines" / "matching_ftm"
 PROCESSED_DIR = PIPE_ROOT / "data" / "processed"
-DEFAULT_MASTER = PROCESSED_DIR / "master_permits.csv"
-DEFAULT_CHARTS_DIR = PROCESSED_DIR / "charts"
+DEFAULT_MASTER = PROCESSED_DIR / "master_participants.csv"
+DEFAULT_CHARTS_DIR = REPO_ROOT / "analysis" / "ftm" / "charts"
 DEFAULT_FINAL_ROOT = REPO_ROOT / "final_results"
 EXPORT_STEM = "farms_permits_minfin"
+FTM_RAW_ANIMALS = PIPE_ROOT / "data" / "raw" / "FTM_dieraantallen.csv"
+DATA_YEAR = 2021
 DEFAULT_KEEP_COLS = [
     # Identifiers and company
     "farm_id",
@@ -24,6 +26,7 @@ DEFAULT_KEEP_COLS = [
     "FICTIEF_BEDRIJFSNUMMER",
     "combined_company_names",
     "combined_kvk_numbers",
+    "matched_address",
     "combined_address",
     # Geo/cluster coords
     "cluster_x_rd",
@@ -54,6 +57,53 @@ def copy_with_date(src: Path, dest_dir: Path, stem: str, date_tag: str) -> Path:
     return dest
 
 
+def resolve_latest_charts_dir(base: Path) -> Path:
+    """
+    If the base has date subfolders (YYYY_MM_DD), pick the latest; otherwise return base.
+    """
+    if not base.exists():
+        raise FileNotFoundError(f"charts directory not found: {base}")
+    dated_subdirs = []
+    for p in base.iterdir():
+        if p.is_dir() and p.name[:4].isdigit():
+            dated_subdirs.append(p)
+    if dated_subdirs:
+        return sorted(dated_subdirs)[-1]
+    return base
+
+
+def build_farm_rel_map(df: pd.DataFrame) -> dict[str, set]:
+    rel_map: dict[str, set] = {}
+    linked = df[df["link_method"] != "niet_gelinkt"]
+    for _, row in linked.iterrows():
+        fid = row.get("farm_id", "")
+        rel = row.get("rel_anoniem", "")
+        if not fid or pd.isna(fid) or not rel or pd.isna(rel):
+            continue
+        rel_map.setdefault(str(fid), set()).add(str(rel))
+    return rel_map
+
+
+def farms_with_animals(df: pd.DataFrame, ftm_raw: Path, year: int) -> set[str]:
+    """Return farm_ids that have nonzero animal counts in FTM for the given year (via rel_anoniem mapping)."""
+    rel_map = build_farm_rel_map(df)
+    if not ftm_raw.exists():
+        return set()
+    ftm = pd.read_csv(ftm_raw)
+    ftm["gem_jaar"] = pd.to_numeric(ftm.get("gem_jaar"), errors="coerce")
+    ftm = ftm[ftm["gem_jaar"] == year]
+    ftm["gem_aantal_dieren"] = pd.to_numeric(ftm["gem_aantal_dieren"], errors="coerce")
+    ftm = ftm.dropna(subset=["gem_aantal_dieren"])
+    ftm = ftm[ftm["gem_aantal_dieren"] > 0]
+    valid_rels = set(ftm["rel_anoniem"].dropna().astype(str).unique())
+
+    farms = set()
+    for fid, rels in rel_map.items():
+        if rels & valid_rels:
+            farms.add(fid)
+    return farms
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Export final CSV and chart overview to final_results/<date>.")
     parser.add_argument("--master", type=Path, default=DEFAULT_MASTER, help="Path to master_permits.csv.")
@@ -80,7 +130,8 @@ def main() -> None:
     args = parser.parse_args()
 
     master_path = args.master.expanduser().resolve()
-    charts_dir = args.charts_dir.expanduser().resolve()
+    charts_dir_base = args.charts_dir.expanduser().resolve()
+    charts_dir = resolve_latest_charts_dir(charts_dir_base)
     final_root = args.final_root.expanduser().resolve()
     date_tag = args.date_tag
 
@@ -100,6 +151,15 @@ def main() -> None:
 
     # Write a slimmed version of the master CSV with selected columns.
     df = pd.read_csv(master_path)
+    # Filter to target year to align with charts
+    year_cols = [c for c in ("gem_jaar", "jaar") if c in df.columns]
+    if year_cols:
+        col = year_cols[0]
+        df = df[pd.to_numeric(df[col], errors="coerce") == DATA_YEAR].copy()
+    # Keep only farms with animals (via FTM 2021 rel mapping)
+    farms = farms_with_animals(df, FTM_RAW_ANIMALS, DATA_YEAR)
+    if farms:
+        df = df[df["farm_id"].astype(str).isin(farms)]
     # Build combined address column: gather all available addresses (permit + KVK) and de-duplicate.
     def normalize_house_number(val: object) -> str:
         if pd.isna(val):
@@ -172,7 +232,28 @@ def main() -> None:
         addrs = dedup_preserve(addrs)
         return " | ".join(addrs)
 
+    def matched_address(row) -> str:
+        """Return the address used for linking, based on link_method."""
+        method = row.get("link_method", "")
+        if method == "permit_kvk_adres":
+            return format_addr(
+                row.get("kvk_api_straat", ""),
+                row.get("kvk_api_huisnummer", ""),
+                "",
+                row.get("kvk_api_postcode", ""),
+                row.get("kvk_api_plaats", ""),
+            )
+        # Default to permit address (permit_adres, fosfaat_adres, rel, etc.)
+        return format_addr(
+            row.get("B_STRAATNAAM", ""),
+            row.get("B_HUIS_NR", ""),
+            row.get("B_HUIS_NR_TOEV", ""),
+            row.get("B_POSTCODE", ""),
+            row.get("B_PLAATS", ""),
+        )
+
     df["combined_address"] = df.apply(collect_addresses, axis=1)
+    df["matched_address"] = df.apply(matched_address, axis=1)
 
     # Combined company names across all relevant columns.
     def collect_names(row) -> str:
