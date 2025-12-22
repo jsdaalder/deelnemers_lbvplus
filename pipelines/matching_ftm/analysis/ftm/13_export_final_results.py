@@ -8,7 +8,7 @@ import shutil
 
 import pandas as pd
 
-REPO_ROOT = Path(__file__).resolve().parents[2]  # repo root
+REPO_ROOT = Path(__file__).resolve().parents[4]  # repo root
 PIPE_ROOT = REPO_ROOT / "pipelines" / "matching_ftm"
 PROCESSED_DIR = PIPE_ROOT / "data" / "processed"
 DEFAULT_MASTER = PROCESSED_DIR / "master_participants.csv"

@@ -50,12 +50,12 @@ End-to-end flow to link permit-rescinded and minfin buy-out farms to the nationa
    - `python3 scripts/09_merge_minfin_into_master.py`  *(if present; ensure numbering if you keep a merge step)*  
    - Output: `data/processed/master_permits.csv` (includes all permits + minfin, animal counts when matched)
 
-8) **Reporting (root/analysis/ftm)**  
-   - `python3 analysis/ftm/14_generate_charts.py` (charts to `analysis/ftm/charts/<YYYY_MM_DD>/`)  
-   - (Legacy) `python3 analysis/ftm/10_generate_report.py` kept for reference
+8) **Reporting (`pipelines/matching_ftm/analysis/ftm/`)**  
+   - `python3 pipelines/matching_ftm/analysis/ftm/14_generate_charts.py` (charts to `pipelines/matching_ftm/analysis/ftm/charts/<YYYY_MM_DD>/`)  
+   - (Legacy) `python3 pipelines/matching_ftm/analysis/ftm/10_generate_report.py` kept for reference
 
-9) **Export final deliverables (root/analysis/ftm)**  
-   - `python3 analysis/ftm/13_export_final_results.py`  
+9) **Export final deliverables (`pipelines/matching_ftm/analysis/ftm/`)**  
+   - `python3 pipelines/matching_ftm/analysis/ftm/13_export_final_results.py`  
    - Copies chart overviews (PNG/PDF if present) and writes a slimmed `farms_permits_minfin_<date>.csv` (keeps key columns only) to `final_results/<YYYY_MM_DD>/` with the date tag in filenames.
 
 ## Notes on matching logic
@@ -68,4 +68,4 @@ End-to-end flow to link permit-rescinded and minfin buy-out farms to the nationa
 - `05_prepare_2015_linkages.py` aligns fosfaat categories 100/101/102 to FTM dairy categories and builds `05_fosfaat_rel_crosswalk.csv` for additional KVK/Naam hints.
 
 ## Git hygiene
-- The `final_results/<date>/` folder is the shareable bundle. Commit the charts (PNG), but keep the CSVs local; others can regenerate them with the export script. The participants snapshot that feeds this pipeline lives in `pipelines/participants/data/06_deelnemers_lbv_lbvplus.csv` and is synced into `pipelines/matching_ftm/data/raw/`; no dated copy in repo root.
+- The `final_results/<date>/` folder is the shareable bundle. Commit the charts (PNG), but keep the CSVs local; others can regenerate them with the export script. The participants snapshot that feeds this pipeline lives in `pipelines/participants/data/06_deelnemers_lbv_lbvplus.csv` and is synced into `pipelines/matching_ftm/data/raw/` (also copied to repo root with a date tag).

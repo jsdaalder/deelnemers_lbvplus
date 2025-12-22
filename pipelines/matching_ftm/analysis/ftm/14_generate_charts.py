@@ -17,7 +17,7 @@ from PIL import Image
 import textwrap
 
 # Repository layout
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 PIPE_ROOT = REPO_ROOT / "pipelines" / "matching_ftm"
 PROCESSED_DIR = PIPE_ROOT / "data" / "processed"
 CHARTS_DIR = Path(__file__).resolve().parent / "charts"

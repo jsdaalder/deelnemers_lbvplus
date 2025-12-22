@@ -29,7 +29,7 @@ final_results/**/*.csv
 deelnemers_lbv_lbvplus_*.csv
 
 # Analysis outputs
-analysis/ftm/charts/
+pipelines/matching_ftm/analysis/ftm/charts/
 
 # Matching pipelines (data/caches/artifacts)
 pipelines/matching_ftm/data/
