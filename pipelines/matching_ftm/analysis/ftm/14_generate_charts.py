@@ -40,6 +40,15 @@ CHART_FILES = {
 }
 ALL_CHART_FILENAMES = set(CHART_FILES.values())
 
+# Utility: normalize province names for filtering and filenames
+def normalize_province(value: str) -> str:
+    return str(value or "").strip().lower()
+
+
+def slugify_label(label: str) -> str:
+    return normalize_province(label).replace(" ", "_").replace("/", "_")
+
+
 # Shared styling so future charts stay consistent
 STYLE: Dict[str, object] = {
     "color_permit": "#9EB8D4",
@@ -283,6 +292,15 @@ def build_farm_rel_map(df: pd.DataFrame) -> Dict[str, set]:
     return rel_map
 
 
+def filter_by_province(df: pd.DataFrame, province: str) -> pd.DataFrame:
+    """Return only rows matching the given province (case-insensitive)."""
+    if "Province" not in df.columns:
+        return df.iloc[0:0]
+    target = normalize_province(province)
+    norm = df["Province"].apply(normalize_province)
+    return df.loc[norm == target].copy()
+
+
 def compute_company_categories(master_df: pd.DataFrame, raw_animals_path: Path, year: int) -> Tuple[pd.Series, int]:
     """Count linked farms per animal category; mixed if >1 categories each over threshold."""
     master_df = master_df[master_df.get("has_animals", True)]
@@ -341,7 +359,7 @@ def compute_company_categories(master_df: pd.DataFrame, raw_animals_path: Path, 
 
 
 def compute_avg_animals_per_farm(
-    master_df: pd.DataFrame, raw_animals_path: Path, year: int
+    master_df: pd.DataFrame, raw_animals_path: Path, year: int, rel_filter: set | None = None
 ) -> Tuple[pd.Series, int, pd.Series, int]:
     """Average animals per farm by category (linked farms vs full FTM population), given year."""
     farm_rel_map = build_farm_rel_map(master_df)
@@ -386,7 +404,10 @@ def compute_avg_animals_per_farm(
 
     # Full FTM population (per rel_anoniem)
     rel_totals: Dict[str, Dict[str, float]] = {}
-    for rel, group in raw.groupby("rel_anoniem"):
+    raw_full = raw
+    if rel_filter:
+        raw_full = raw_full[raw_full["rel_anoniem"].astype(str).isin(rel_filter)]
+    for rel, group in raw_full.groupby("rel_anoniem"):
         sums = group.groupby("category")["gem_aantal_dieren"].sum()
         rel_totals[str(rel)] = {cat: float(val) for cat, val in sums.items()}
     rel_count = len(rel_totals)
@@ -766,7 +787,12 @@ def plot_chart4_companies_by_category(counts: pd.Series, total_rels: int, output
 
 
 def plot_chart5_avg_animals(
-    linked_avg: pd.Series, farm_count: int, ftm_avg: pd.Series, ftm_farms: int, output_path: Path
+    linked_avg: pd.Series,
+    farm_count: int,
+    ftm_avg: pd.Series,
+    ftm_farms: int,
+    output_path: Path,
+    region_label: str | None = None,
 ) -> None:
     """Bar chart showing average animals per farm per category (linked vs full FTM)."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -778,14 +804,29 @@ def plot_chart5_avg_animals(
     x = list(range(len(categories)))
     width = 0.4
 
+    region_suffix = f" ({region_label})" if region_label else ""
+    linked_label = f"Gelinkt {region_label}" if region_label else "Gelinkt"
+    ftm_label = f"FTM totaal {region_label}" if region_label else "FTM totaal"
     fig, ax = plt.subplots(figsize=STYLE["figsize"])
-    bars1 = ax.bar([i - width / 2 for i in x], linked_vals, width, label=f"Gelinkt ({farm_count} bedrijven)", color=str(STYLE["color_permit"]))
-    bars2 = ax.bar([i + width / 2 for i in x], ftm_vals, width, label=f"FTM totaal ({ftm_farms} bedrijven)", color=str(STYLE["color_unlinked"]))
+    bars1 = ax.bar(
+        [i - width / 2 for i in x],
+        linked_vals,
+        width,
+        label=f"{linked_label} ({farm_count} bedrijven)",
+        color=str(STYLE["color_permit"]),
+    )
+    bars2 = ax.bar(
+        [i + width / 2 for i in x],
+        ftm_vals,
+        width,
+        label=f"{ftm_label} ({ftm_farms} bedrijven)",
+        color=str(STYLE["color_unlinked"]),
+    )
 
     ax.set_ylabel("Gemiddeld aantal dieren per bedrijf")
     title = (
-        "Chart 5: Gemiddeld aantal dieren per categorie "
-        f"(gelinkt {farm_count} vs. alle FTM bedrijven {ftm_farms}, jaar {DATA_YEAR})"
+        f"Chart 5{region_suffix}: Gemiddeld aantal dieren per categorie "
+        f"(gelinkt {farm_count} vs. FTM {ftm_farms}, jaar {DATA_YEAR})"
     )
     ax.set_title(wrap_title(title), fontsize=STYLE["title_fontsize"], pad=float(STYLE["title_pad"]))
     ax.set_xticks(x)
@@ -869,7 +910,9 @@ def plot_chart4_permit_stages(stage_df: pd.DataFrame, output_path: Path) -> None
     plt.close(fig)
 
 
-def plot_chart4_stage_animals(stage_counts: pd.DataFrame, stage_farms: int, output_path: Path) -> None:
+def plot_chart4_stage_animals(
+    stage_counts: pd.DataFrame, stage_farms: int, output_path: Path, region_label: str | None = None
+) -> None:
     """Stacked bar with definitive animals per category."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -877,6 +920,8 @@ def plot_chart4_stage_animals(stage_counts: pd.DataFrame, stage_farms: int, outp
     definitive = stage_counts["definitive_decision"].tolist()
     draft = [0 for _ in definitive]
     total_animals = sum(definitive) + sum(draft)
+    region_suffix = f" ({region_label})" if region_label else ""
+    region_clause = f" in {region_label}" if region_label else ""
 
     fig, ax = plt.subplots(figsize=STYLE["figsize"])
     bar1 = ax.bar(categories, definitive, label="Definitief besluit", color=str(STYLE["color_definitive"]))
@@ -890,9 +935,9 @@ def plot_chart4_stage_animals(stage_counts: pd.DataFrame, stage_farms: int, outp
 
     ax.set_ylabel("Aantal dieren")
     sentence = (
-        "Chart 7: De "
+        f"Chart 7{region_suffix}: De "
         + f"{stage_farms:,}".replace(",", ".")
-        + " bedrijven van wie de vergunning definitief is ingetrokken, hielden "
+        + f" bedrijven van wie de vergunning definitief is ingetrokken{region_clause}, hielden "
         + f"{total_animals:,}".replace(",", ".")
         + " dieren. Deze stallen staan nu dus leeg."
     )
@@ -1043,7 +1088,7 @@ def combine_charts(charts_dir: Path, output_name: str = "chart_all.png") -> Path
     return output_path
 
 
-def generate_charts(master_path: Path, charts_dir: Path) -> None:
+def generate_charts(master_path: Path, charts_dir: Path, province_charts: list[str] | None = None) -> None:
     """Wrapper to generate all charts (Venn + linking pie)."""
     # Apply shared matplotlib defaults for consistent sizing
     plt.rcParams.update(
@@ -1170,6 +1215,35 @@ def generate_charts(master_path: Path, charts_dir: Path) -> None:
     overview_path = combine_charts(charts_dir, CHART_FILES["overview"])
     print(f"Combined overview saved to {overview_path}.")
 
+    # Province-specific variants (optional)
+    province_charts = province_charts or []
+    for province in province_charts:
+        prov_df = filter_by_province(df_match, province)
+        if prov_df.empty:
+            print(f"[warn] No rows for province '{province}', skipping province charts.")
+            continue
+        rels = set()
+        for rel_set in build_farm_rel_map(prov_df).values():
+            rels.update(rel_set)
+        slug = slugify_label(province) or "province"
+        avg_path = charts_dir / f"5_chart_avg_animals_by_category_{slug}.png"
+        linked_avg_p, avg_farms_p, ftm_avg_p, ftm_farms_p = compute_avg_animals_per_farm(
+            prov_df, FTM_RAW_ANIMALS, DATA_YEAR, rel_filter=rels if rels else None
+        )
+        plot_chart5_avg_animals(linked_avg_p, avg_farms_p, ftm_avg_p, ftm_farms_p, avg_path, region_label=province)
+        print(
+            f"[province] Saved avg animals chart for {province} to {avg_path} "
+            f"(linked farms: {avg_farms_p}, ftm farms: {ftm_farms_p})."
+        )
+
+        stage_counts_p, stage_farms_p = compute_stage_animal_counts(prov_df)
+        stage_path = charts_dir / f"7_chart_animals_by_stage_{slug}.png"
+        plot_chart4_stage_animals(stage_counts_p, stage_farms_p, stage_path, region_label=province)
+        print(
+            f"[province] Saved stage animals chart for {province} to {stage_path} "
+            f"(farms with animals: {stage_farms_p})."
+        )
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate charts for permit/minfin analysis.")
@@ -1185,12 +1259,18 @@ def parse_args() -> argparse.Namespace:
         default=CHARTS_DIR,
         help="Base directory where charts will be written.",
     )
+    parser.add_argument(
+        "--province-charts",
+        nargs="*",
+        default=[],
+        help="Optional province names to generate extra charts (avg animals and stage animals) for that subset.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    generate_charts(args.master, args.charts_dir)
+    generate_charts(args.master, args.charts_dir, province_charts=args.province_charts)
 
 
 if __name__ == "__main__":
