@@ -156,17 +156,6 @@ for prov in sorted(farm_latest["Instantie_latest"].unique()):
         }
     )
 
-out = pd.DataFrame(rows)
-sum_row = {"province": "Total"}
-for col in out.columns:
-    if col != "province":
-        sum_row[col] = out[col].sum()
-out = pd.concat([out, pd.DataFrame([sum_row])], ignore_index=True)
-out.to_csv("data/province_stage_irrevocable.csv", index=False)
-print(out)
-print(f"[info] Wrote data/province_stage_irrevocable.csv (cutoff {cutoff})")
-PY
-
 info "Step 07: sync participants to matching pipelines"
 DEST_DIR_FTM="$REPO_ROOT/pipelines/matching_ftm/data/raw"
 DEST_DIR_NRC="$REPO_ROOT/pipelines/matching_nrc/data/raw"
