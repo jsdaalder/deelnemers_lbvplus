@@ -2,7 +2,7 @@
 """
 Experimental stage classifier (LLM) for LBV/LBV+ notices, plus on-the-spot eval.
 
-- Lives in llm_improvement_testing/ to avoid touching the main pipeline.
+- Lives under pipelines/participants/experiments/llm_improvement_testing/ to avoid touching the main pipeline.
 - Reads a CSV with TEXT_HTML/TEXT_PDF (default: manual_stage_truth.csv).
 - Runs an LLM prompt that only predicts STAGE, returns JSON {stage, evidence}.
 - If Stage_manual exists, prints confusion/mismatch stats and can export them.
@@ -25,10 +25,11 @@ except ImportError:  # pragma: no cover - optional dependency
     OpenAI = None
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_INPUT = REPO_ROOT / "llm_improvement_testing" / "manual_stage_truth.csv"
+REPO_ROOT = Path(__file__).resolve().parents[4]
+EXPERIMENT_ROOT = REPO_ROOT / "pipelines" / "participants" / "experiments" / "llm_improvement_testing"
+DEFAULT_INPUT = EXPERIMENT_ROOT / "manual_stage_truth.csv"
 DEFAULT_MODEL = os.environ.get("OPENAI_STAGE_MODEL", "gpt-4.1-mini")
-DEFAULT_RUNLOG = REPO_ROOT / "llm_improvement_testing" / "stage_run_results.json"
+DEFAULT_RUNLOG = EXPERIMENT_ROOT / "stage_run_results.json"
 DOTENV_PATH = REPO_ROOT / ".env"
 
 

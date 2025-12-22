@@ -8,7 +8,7 @@ A public, end-to-end view of the LBV/LBV+ shutdown scheme. The repo scrapes perm
 - `pipelines/matching_nrc/` – alternative matching against NRC’s barn-level WOO dataset.
 - `pipelines/matching_ftm/analysis/ftm/` – lightweight scripts to turn the processed tables into charts and a trimmed CSV for sharing.
 - `final_results/<date>/` – the public bundle (overview PNG/PDF plus a slim CSV). CSVs stay out of git; charts can be committed.
-- `experiments/` – prompt tests and scratch space.
+- `pipelines/participants/experiments/` – prompt tests and scratch space (LLM prompt/run comparisons).
 
 ## How to run (high level)
 1) **Participants**: run `bash pipelines/participants/scripts/run_all.sh` with either local HTML/PDF inputs (`MODE=local FILES="file1.html file2.html"`) or the SRU API (`MODE=api ...`). You need an OpenAI API key in `.env`.

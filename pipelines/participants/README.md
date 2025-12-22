@@ -23,3 +23,4 @@ Scrapes LBV/LBV+ notices, extracts text from PDFs, asks an LLM to identify the s
 
 ## Notes
 - PDFs and data folders are git-ignored. Keep any personal data out of commits.
+- Prompt experiments and LLM prompt/run comparisons live under `pipelines/participants/experiments/llm_improvement_testing/`.
