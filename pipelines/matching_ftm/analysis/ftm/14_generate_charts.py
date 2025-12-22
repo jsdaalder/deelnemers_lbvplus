@@ -22,6 +22,7 @@ PIPE_ROOT = REPO_ROOT / "pipelines" / "matching_ftm"
 PROCESSED_DIR = PIPE_ROOT / "data" / "processed"
 CHARTS_DIR = Path(__file__).resolve().parent / "charts"
 FTM_RAW_ANIMALS = PIPE_ROOT / "data" / "raw" / "FTM_dieraantallen.csv"
+WOONPLAATSEN_CSV = PIPE_ROOT / "data" / "raw" / "woonplaatsen.csv"
 DEFAULT_MASTER = PROCESSED_DIR / "master_participants.csv"
 DATA_YEAR = 2021
 
@@ -47,6 +48,20 @@ def normalize_province(value: str) -> str:
 
 def slugify_label(label: str) -> str:
     return normalize_province(label).replace(" ", "_").replace("/", "_")
+
+
+def load_woonplaatsen_map(csv_path: Path) -> dict[str, str]:
+    """Return mapping from normalized place name to proper-cased province name."""
+    if not csv_path.exists():
+        return {}
+    try:
+        df = pd.read_csv(csv_path, sep=";", skiprows=4, header=None, names=["plaats", "gemeente", "provincie"])
+    except Exception:
+        return {}
+    df = df.dropna(subset=["plaats", "provincie"])
+    df["plaats_norm"] = df["plaats"].astype(str).str.strip().str.lower()
+    df["prov_clean"] = df["provincie"].astype(str).str.strip()
+    return dict(zip(df["plaats_norm"], df["prov_clean"]))
 
 
 # Shared styling so future charts stay consistent
@@ -299,6 +314,34 @@ def filter_by_province(df: pd.DataFrame, province: str) -> pd.DataFrame:
     target = normalize_province(province)
     norm = df["Province"].apply(normalize_province)
     return df.loc[norm == target].copy()
+
+
+def attach_province(df: pd.DataFrame, place_to_province: dict[str, str]) -> pd.DataFrame:
+    """Fill Province using woonplaatsen list if missing."""
+    if "Province" not in df.columns and not place_to_province:
+        return df
+
+    place_cols = ["B_PLAATS", "kvk_api_plaats"]
+
+    def resolve(row) -> str:
+        existing = row.get("Province", "")
+        if pd.notna(existing) and str(existing).strip():
+            return existing
+        for col in place_cols:
+            if col not in row:
+                continue
+            val = row.get(col, "")
+            if pd.isna(val) or not str(val).strip():
+                continue
+            norm = normalize_province(str(val))
+            prov = place_to_province.get(norm, "")
+            if prov:
+                return prov
+        return ""
+
+    df = df.copy()
+    df["Province"] = df.apply(resolve, axis=1)
+    return df
 
 
 def compute_company_categories(master_df: pd.DataFrame, raw_animals_path: Path, year: int) -> Tuple[pd.Series, int]:
@@ -1111,6 +1154,8 @@ def generate_charts(master_path: Path, charts_dir: Path, province_charts: list[s
             png.unlink()
 
     df_raw = pd.read_csv(master_path)
+    place_map = load_woonplaatsen_map(WOONPLAATSEN_CSV)
+    df_raw = attach_province(df_raw, place_map)
     # mark farms with animals flag (mutated downstream)
     if "has_animals" not in df_raw.columns:
         df_raw["has_animals"] = False
@@ -1216,7 +1261,8 @@ def generate_charts(master_path: Path, charts_dir: Path, province_charts: list[s
     print(f"Combined overview saved to {overview_path}.")
 
     # Province-specific variants (optional)
-    province_charts = province_charts or []
+    province_charts = province_charts or ["Gelderland"]
+    province_dir_root = charts_dir / "gelderland"
     for province in province_charts:
         prov_df = filter_by_province(df_match, province)
         if prov_df.empty:
@@ -1226,7 +1272,9 @@ def generate_charts(master_path: Path, charts_dir: Path, province_charts: list[s
         for rel_set in build_farm_rel_map(prov_df).values():
             rels.update(rel_set)
         slug = slugify_label(province) or "province"
-        avg_path = charts_dir / f"5_chart_avg_animals_by_category_{slug}.png"
+        prov_dir = province_dir_root
+        prov_dir.mkdir(parents=True, exist_ok=True)
+        avg_path = prov_dir / f"5_chart_avg_animals_by_category_{slug}.png"
         linked_avg_p, avg_farms_p, ftm_avg_p, ftm_farms_p = compute_avg_animals_per_farm(
             prov_df, FTM_RAW_ANIMALS, DATA_YEAR, rel_filter=rels if rels else None
         )
@@ -1237,7 +1285,7 @@ def generate_charts(master_path: Path, charts_dir: Path, province_charts: list[s
         )
 
         stage_counts_p, stage_farms_p = compute_stage_animal_counts(prov_df)
-        stage_path = charts_dir / f"8_chart_animals_by_stage_{slug}.png"
+        stage_path = prov_dir / f"8_chart_animals_by_stage_{slug}.png"
         plot_chart4_stage_animals(stage_counts_p, stage_farms_p, stage_path, region_label=province)
         print(
             f"[province] Saved stage animals chart for {province} to {stage_path} "
@@ -1262,8 +1310,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--province-charts",
         nargs="*",
-        default=[],
-        help="Optional province names to generate extra charts (avg animals and stage animals) for that subset.",
+        default=["Gelderland"],
+        help="Province names to generate extra charts (avg animals and stage animals) for that subset.",
     )
     return parser.parse_args()
 
