@@ -24,3 +24,4 @@ Scrapes LBV/LBV+ notices, extracts text from PDFs, asks an LLM to identify the s
 ## Notes
 - PDFs and data folders are git-ignored. Keep any personal data out of commits.
 - Prompt experiments and LLM prompt/run comparisons live under `pipelines/participants/experiments/llm_improvement_testing/`.
+- **LLM validation**: we manually labeled a sample of notices (`manual_stage_truth.csv`) and used the `llm_improvement_testing` mini-pipeline to iterate on the stage/address prompt. The helper script `stage_classifier_test.py` runs the prompt against the labeled set, prints confusion/mismatch stats, and writes a run log. Mismatches were reviewed and the prompt adjusted (e.g., draft vs definitive precedence, ignoring navigation text). The current prompt in `scripts/04_ai_classify_lbv_and_addresses.py` reflects those iterations; rerun the mini-pipeline if you tweak the prompt or model.
