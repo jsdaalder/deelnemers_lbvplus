@@ -887,7 +887,7 @@ def plot_chart4_permit_stages(stage_df: pd.DataFrame, output_path: Path) -> None
     definitive_total = stage_df.at["definitive_decision", "total"] if "definitive_decision" in stage_df.index else 0
     pct_def = 0 if total_farms == 0 else definitive_total / total_farms * 100
     title = (
-        "Chart 6: Van de "
+        "Chart 7: Van de "
         + f"{total_farms:,}".replace(",", ".")
         + " bedrijven die in het proces zijn de vergunning in te trekken, heeft nog maar "
         + f"{pct_def:.1f}%"
@@ -935,7 +935,7 @@ def plot_chart4_stage_animals(
 
     ax.set_ylabel("Aantal dieren")
     sentence = (
-        f"Chart 7{region_suffix}: De "
+        f"Chart 8{region_suffix}: De "
         + f"{stage_farms:,}".replace(",", ".")
         + f" bedrijven van wie de vergunning definitief is ingetrokken{region_clause}, hielden "
         + f"{total_animals:,}".replace(",", ".")
@@ -1000,7 +1000,7 @@ def plot_chart5_buyout_share(buyout_df: pd.DataFrame, output_path: Path) -> None
 
     fig.suptitle(
         wrap_title(
-            f"Chart 5: Als alle {total_farms} bedrijven zich laten uitkopen, verdwijnen er "
+            f"Chart 6: Als alle {total_farms} bedrijven zich laten uitkopen, verdwijnen er "
             + f"{total_buyout:,}".replace(",", ".")
             + " dieren"
         ),
@@ -1037,7 +1037,7 @@ def plot_chart8_definitive_progress(
     ax.set_ylabel("Percentage")
     ax.set_title(
         wrap_title(
-            "Chart 8: Slechts "
+            "Chart 9: Slechts "
             + f"{pct_participants:.1f}%"
             + " van de bekende deelnemers die bezig zijn met het intrekken van hun vergunning en "
             + f"{pct_animals:.1f}%"
@@ -1175,10 +1175,10 @@ def generate_charts(master_path: Path, charts_dir: Path, province_charts: list[s
     )
 
     stage_counts, stage_farms = compute_stage_animal_counts(df_match)
-    chart5_path = charts_dir / CHART_FILES["animals_by_stage"]
-    plot_chart4_stage_animals(stage_counts, stage_farms, chart5_path)
+    chart8_path = charts_dir / CHART_FILES["animals_by_stage"]
+    plot_chart4_stage_animals(stage_counts, stage_farms, chart8_path)
     print(
-        f"Saved stage stacked bar to {chart5_path} (farms with stage+animals: {stage_farms}, "
+        f"Saved stage stacked bar to {chart8_path} (farms with stage+animals: {stage_farms}, "
         f"categories: {stage_counts.index.tolist()})."
     )
 
@@ -1190,7 +1190,7 @@ def generate_charts(master_path: Path, charts_dir: Path, province_charts: list[s
         f"(categories: {buyout_df.index.tolist()}, total_buyout_animals: {int(buyout_df['buyout'].sum())})."
     )
 
-    # Chart 8: definitive progress (participants and animals)
+    # Chart 9: definitive progress (participants and animals)
     animals_def = int(stage_counts["definitive_decision"].sum())
     animals_total = int(buyout_df["buyout"].sum())
     participants_def = int(stage_link_df.at["definitive_decision", "total"]) if "definitive_decision" in stage_link_df.index else 0
@@ -1237,7 +1237,7 @@ def generate_charts(master_path: Path, charts_dir: Path, province_charts: list[s
         )
 
         stage_counts_p, stage_farms_p = compute_stage_animal_counts(prov_df)
-        stage_path = charts_dir / f"7_chart_animals_by_stage_{slug}.png"
+        stage_path = charts_dir / f"8_chart_animals_by_stage_{slug}.png"
         plot_chart4_stage_animals(stage_counts_p, stage_farms_p, stage_path, region_label=province)
         print(
             f"[province] Saved stage animals chart for {province} to {stage_path} "
