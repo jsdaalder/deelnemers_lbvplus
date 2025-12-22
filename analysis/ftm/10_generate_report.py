@@ -28,7 +28,7 @@ def category_from_row(row: pd.Series) -> str:
     rav = str(rav_val).strip()
     if rav.startswith("A4"):
         return "vleeskalveren"
-    if cat == "rundvee":
+    if rav.startswith("A"):
         return "rundvee (excl. kalveren)"
     return cat
 

@@ -17,6 +17,8 @@ DEFAULT_FINAL_ROOT = REPO_ROOT / "final_results"
 EXPORT_STEM = "farms_permits_minfin"
 FTM_RAW_ANIMALS = PIPE_ROOT / "data" / "raw" / "FTM_dieraantallen.csv"
 DATA_YEAR = 2021
+# Additional aggregated export (unique farms)
+EXPORT_AGG_STEM = "farms_permits_minfin_agg"
 DEFAULT_KEEP_COLS = [
     # Identifiers and company
     "farm_id",
@@ -310,6 +312,46 @@ def main() -> None:
     dated_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(slim_path, index=False)
     copied.append(slim_path)
+
+    # Aggregated (unique farms) export: collapse per farm/category to avoid source duplicates.
+    agg_cols = ["farm_id", "rel_anoniem", "UBN", "source", "link_method", "combined_company_names", "combined_kvk_numbers", "matched_address", "combined_address"]
+    numeric_cols = ["gem_aantal_dieren"]
+    cat_cols = ["rav_code", "Huisvesting", "category"]
+
+    # Recompute category for aggregation
+    df["rav_code"] = df["rav_code"].astype(str).str.upper()
+    df["rav_code"] = df["rav_code"].astype(str).str.upper()
+    df["category"] = df["rav_code"].map(
+        lambda c: "vleeskalveren"
+        if c.startswith("A4")
+        else (
+            "rundvee (excl. kalveren)"
+            if c.startswith("A")
+            else ("varkens" if c.startswith("D") else ("kippen" if c.startswith("E") else ("kalkoenen" if c.startswith("F") else ("geiten" if c.startswith("C") else ""))))
+        )
+    )
+    df["gem_aantal_dieren"] = pd.to_numeric(df["gem_aantal_dieren"], errors="coerce")
+    df = df.dropna(subset=["gem_aantal_dieren"])
+    df = df[df["gem_aantal_dieren"] > 0]
+    agg = (
+        df.groupby(["farm_id", "category"], as_index=False)
+        .agg(
+            {
+                "gem_aantal_dieren": "sum",
+                "rel_anoniem": lambda x: " | ".join(sorted(set(str(v) for v in x if pd.notna(v)))),
+                "UBN": lambda x: " | ".join(sorted(set(str(v) for v in x if pd.notna(v)))),
+                "source": lambda x: " | ".join(sorted(set(str(v) for v in x if pd.notna(v)))),
+                "link_method": lambda x: " | ".join(sorted(set(str(v) for v in x if pd.notna(v)))),
+                "combined_company_names": lambda x: " | ".join(sorted(set(str(v) for v in x if pd.notna(v)))),
+                "combined_kvk_numbers": lambda x: " | ".join(sorted(set(str(v) for v in x if pd.notna(v)))),
+                "matched_address": lambda x: " | ".join(sorted(set(str(v) for v in x if pd.notna(v)))),
+                "combined_address": lambda x: " | ".join(sorted(set(str(v) for v in x if pd.notna(v)))),
+            }
+        )
+    )
+    agg_path = dated_dir / f"{EXPORT_AGG_STEM}_{date_tag}.csv"
+    agg.to_csv(agg_path, index=False)
+    copied.append(agg_path)
 
     if overview_pdf.exists():
         copied.append(copy_with_date(overview_pdf, dated_dir, "charts_overview", date_tag))

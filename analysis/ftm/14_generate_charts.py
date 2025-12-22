@@ -85,17 +85,17 @@ def map_rav_category(code: str) -> str:
     """Map RAV-code to broad animal category."""
     if not code or code == "NAN":
         return ""
-    if code == "A3":
+    if str(code).upper().startswith("A4"):
         return "vleeskalveren"
-    if code.startswith("A"):
+    if str(code).upper().startswith("A"):
         return "rundvee (excl. kalveren)"
-    if code.startswith("D"):
+    if str(code).upper().startswith("D"):
         return "varkens"
-    if code.startswith("E"):
+    if str(code).upper().startswith("E"):
         return "kippen"
-    if code.startswith("F"):
+    if str(code).upper().startswith("F"):
         return "kalkoenen"
-    if code.startswith("C"):
+    if str(code).upper().startswith("C"):
         return "geiten"
     return ""
 

@@ -66,3 +66,6 @@ End-to-end flow to link permit-rescinded and minfin buy-out farms to the nationa
 
 ## Historical (2015) cross-links
 - `05_prepare_2015_linkages.py` aligns fosfaat categories 100/101/102 to FTM dairy categories and builds `05_fosfaat_rel_crosswalk.csv` for additional KVK/Naam hints.
+
+## Git hygiene
+- The `final_results/<date>/` folder is the shareable bundle. Commit the charts (PNG), but keep the CSVs local; others can regenerate them with the export script. The participants snapshot that feeds this pipeline lives in `pipelines/participants/data/06_deelnemers_lbv_lbvplus.csv` and is synced into `pipelines/matching_ftm/data/raw/`; no dated copy in repo root.

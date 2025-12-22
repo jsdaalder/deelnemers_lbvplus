@@ -256,6 +256,16 @@ def parse_args() -> argparse.Namespace:
         help="Alleen rijen waarbij LBV_TYPE nog leeg is verwerken.",
     )
     parser.add_argument(
+        "--full-run",
+        action="store_true",
+        help="Forceer een volledige run (overschrijft incremental gedrag).",
+    )
+    parser.add_argument(
+        "--no-prompt",
+        action="store_true",
+        help="Sla interactieve keuzes over; gebruik incremental tenzij --full-run.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Alle rijen opnieuw verwerken, ongeacht bestaande AI-resultaten.",
@@ -734,32 +744,46 @@ def main():
             existing_path = candidate
     existing_map = load_existing_annotations(existing_path)
     df = apply_existing_annotations(df, existing_map)
+    incremental = bool(existing_map) and not args.full_run
 
     total_rows = len(df)
     limit = args.limit if args.limit is not None else args.max_rows
-    if limit is None:
+    if limit is None and not args.no_prompt:
         limit = prompt_trial_or_all(total_rows)
 
     user_mode = args.mode
     only_unclassified = args.only_unclassified
     if user_mode is None:
-        mode_choice = ask_llm_mode()
-        if mode_choice == 2:
-            only_unclassified = True
+        if args.no_prompt:
             user_mode = "full"
-        elif mode_choice == 3:
-            user_mode = "addr"
+            if incremental:
+                only_unclassified = True
         else:
-            user_mode = "full"
+            mode_choice = ask_llm_mode()
+            if mode_choice == 2:
+                only_unclassified = True
+                user_mode = "full"
+            elif mode_choice == 3:
+                user_mode = "addr"
+            else:
+                user_mode = "full"
+
+    # Auto-incremental: skip already annotated rows when previous output exists (unless full_run).
+    if incremental and not args.force:
+        only_unclassified = True
 
     indices = list(df.index)
     if limit is not None:
         indices = indices[: min(limit, len(indices))]
 
+    # Treat NaN/None as empty when deciding which rows to process
+    def _clean(val: Any) -> str:
+        return normalize_text_field(val).strip()
+
     if only_unclassified:
-        indices = [i for i in indices if not str(df.at[i, COL_LBV_TYPE]).strip()]
+        indices = [i for i in indices if not _clean(df.at[i, COL_LBV_TYPE])]
     elif not args.force:
-        indices = [i for i in indices if not str(df.at[i, COL_AI_SOURCE]).strip()]
+        indices = [i for i in indices if not _clean(df.at[i, COL_AI_SOURCE])]
 
     if not indices:
         print("[info] Geen rijen om te verwerken onder de huidige instellingen.")

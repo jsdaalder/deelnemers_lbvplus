@@ -17,7 +17,7 @@ A public, end-to-end view of the LBV/LBV+ shutdown scheme. The repo scrapes perm
 
 ## Outputs and sharing
 - Working data (raw/processed CSVs) lives under each pipeline’s `data/` and stays git-ignored.
-- Only the shareable charts in `final_results/<date>/` are tracked. CSVs remain local to protect sensitive info.
+- The export step writes `final_results/<date>/chart_all_<date>.png` and CSVs (`farms_permits_minfin_<date>.csv` and `_agg_...`). Commit only the charts; keep the CSVs local so others can regenerate them.
 
 ## Data handling
 - `.env`, PDFs, archives, caches, and all intermediate CSVs are ignored. Keep personal data out of commits; remove or anonymize before sharing.

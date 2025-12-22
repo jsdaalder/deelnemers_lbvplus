@@ -6,7 +6,7 @@
 # - Step 01 inputs:
 #     MODE=local  FILES="prov1.html prov2.html"   (local HTML exports)
 #     MODE=api    API_QUERY='c.product-area==officielepublicaties AND ...' [API_MAX=500]
-#   If data/01_overheid_results.csv already exists and RUN_STEP1 is not set, step 01 is skipped.
+#   Step 01 now runs by default (incremental via script logic). Set SKIP_STEP1=1 to keep existing results.
 
 set -euo pipefail
 
@@ -16,11 +16,18 @@ REPO_ROOT="$(cd "$PIPE_ROOT/../.." && pwd)"
 cd "$PIPE_ROOT"
 
 PYTHON="${PYTHON:-python3}"
-MODE="${MODE:-}"
+MODE="${MODE:-api}"
 FILES="${FILES:-}"
 API_QUERY="${API_QUERY:-}"
+# Default API query if none provided (matches LBV/LBV+ provincial notices)
+if [[ -z "$API_QUERY" ]]; then
+  API_QUERY='c.product-area==officielepublicaties AND cql.textAndIndexes="lbv"'
+fi
 API_MAX="${API_MAX:-500}"
-RUN_STEP1="${RUN_STEP1:-}"
+API_TIMEOUT="${API_TIMEOUT:-30}"
+REFRESH_ALL="${REFRESH_ALL:-}"
+SKIP_STEP1="${SKIP_STEP1:-}"
+MAX_ROWS="${MAX_ROWS:-10000}"
 
 info() { printf "\\n[info] %s\\n" "$*"; }
 die() { printf "\\n[error] %s\\n" "$*" >&2; exit 1; }
@@ -32,8 +39,8 @@ grep -q "OPENAI_API_KEY" "$REPO_ROOT/.env" || die "OPENAI_API_KEY not found in $
 mkdir -p data
 
 maybe_step1() {
-  if [[ -f "data/01_overheid_results.csv" && -z "$RUN_STEP1" ]]; then
-    info "Step 01: skipped (data/01_overheid_results.csv already exists). Set RUN_STEP1=1 to force."
+  if [[ -n "$SKIP_STEP1" ]]; then
+    info "Step 01: skipped because SKIP_STEP1 is set."
     return
   fi
   if [[ -z "$MODE" ]]; then
@@ -44,21 +51,32 @@ maybe_step1() {
       die "MODE=local requires FILES=\"file1.html file2.html ...\""
     fi
     IFS=' ' read -r -a FILE_ARR <<< "$FILES"
-    info "Step 01: parse overheid pages (local)"
-    "$PYTHON" scripts/01_parse_overheid_pages.py \
-      --mode local \
-      --files "${FILE_ARR[@]}" \
-      --out data/01_overheid_results.csv
+    refresh_flag=()
+    if [[ -n "$REFRESH_ALL" ]]; then
+      refresh_flag=(--refresh-all)
+    fi
+info "Step 01: parse overheid pages (local)"
+"$PYTHON" scripts/01_parse_overheid_pages.py \
+  --mode local \
+  --files "${FILE_ARR[@]}" \
+  --out data/01_overheid_results.csv \
+  "${refresh_flag[@]}"
   elif [[ "$MODE" == "api" ]]; then
     if [[ -z "$API_QUERY" ]]; then
       die "MODE=api requires API_QUERY='...'"
+    fi
+    refresh_flag=()
+    if [[ -n "$REFRESH_ALL" ]]; then
+      refresh_flag=(--refresh-all)
     fi
     info "Step 01: parse overheid pages (API)"
     "$PYTHON" scripts/01_parse_overheid_pages.py \
       --mode api \
       --api-query "$API_QUERY" \
       --api-max-records "$API_MAX" \
-      --out data/01_overheid_results.csv
+      --api-timeout "$API_TIMEOUT" \
+      --out data/01_overheid_results.csv \
+      "${refresh_flag[@]}"
   else
     die "Unknown MODE=$MODE (use 'local' or 'api')."
   fi
@@ -82,7 +100,11 @@ info "Step 04: LLM classification (LBV/LBV+, stage, address)"
   --out-csv data/04_lbv_enriched_with_ai_summary.csv \
   --mode full \
   --only-unclassified \
-  --limit 100000
+  --no-prompt \
+  --limit "$MAX_ROWS"
+if [[ "$MAX_ROWS" != "0" ]]; then
+  info "Step 04 ran with MAX_ROWS=$MAX_ROWS (only-unclassified). If you expected more rows, rerun with MAX_ROWS=0 or a higher value."
+fi
 
 info "Step 05: deterministic address cleanup"
 "$PYTHON" scripts/05_enrich_addresses.py \
@@ -93,12 +115,6 @@ info "Step 06: aggregate participants"
 "$PYTHON" scripts/06_build_deelnemers.py \
   --input data/05_lbv_enriched_addresses.csv \
   --output data/06_deelnemers_lbv_lbvplus.csv
-
-info "Step 06c: copy definitive participants to repo root with date stamp"
-DATE_TAG="$(date +%Y_%m_%d)"
-DEST="$REPO_ROOT/deelnemers_lbv_lbvplus_${DATE_TAG}.csv"
-cp data/06_deelnemers_lbv_lbvplus.csv "$DEST"
-info "Wrote $DEST"
 
 info "Step 06b: rebuild province-stage overview"
 "$PYTHON" - <<'PY'
