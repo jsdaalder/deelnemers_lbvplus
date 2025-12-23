@@ -55,7 +55,7 @@ def load_woonplaatsen_map(csv_path: Path) -> dict[str, str]:
     if not csv_path.exists():
         return {}
     try:
-        df = pd.read_csv(csv_path, sep=";", skiprows=4, header=None, names=["plaats", "gemeente", "provincie"])
+        df = pd.read_csv(csv_path, sep=";", skiprows=5, header=None, names=["plaats", "gemeente", "provincie"])
     except Exception:
         return {}
     df = df.dropna(subset=["plaats", "provincie"])
@@ -1128,8 +1128,12 @@ def combine_charts(charts_dir: Path, output_name: str = "chart_all.png") -> Path
     return output_path
 
 
-def generate_charts(master_path: Path, charts_dir: Path, province_charts: list[str] | None = None) -> None:
-    """Wrapper to generate all charts (Venn + linking pie)."""
+def generate_charts(
+    master_path: Path,
+    charts_dir: Path,
+    regions: list[dict[str, object]] | None = None,
+) -> None:
+    """Wrapper to generate all charts (Venn + linking pie) for national + optional regions."""
     # Apply shared matplotlib defaults for consistent sizing
     plt.rcParams.update(
         {
@@ -1257,35 +1261,51 @@ def generate_charts(master_path: Path, charts_dir: Path, province_charts: list[s
     overview_path = combine_charts(charts_dir, CHART_FILES["overview"])
     print(f"Combined overview saved to {overview_path}.")
 
-    # Province-specific variants (optional)
-    province_charts = province_charts or ["Gelderland"]
-    province_dir_root = charts_dir / "gelderland"
-    for province in province_charts:
-        prov_df = filter_by_province(df_match, province)
-        if prov_df.empty:
-            print(f"[warn] No rows for province '{province}', skipping province charts.")
+    # Regional variants (national + optional subset regions)
+    regions = regions or [
+        {"name": "NL", "filter": None, "subdir": None, "label": None},
+        {"name": "Gelderland", "filter": lambda df: filter_by_province(df, "Gelderland"), "subdir": "gelderland", "label": "Gelderland"},
+    ]
+    base_charts_dir = charts_dir
+
+    for region in regions:
+        name = region.get("name")
+        filtr = region.get("filter")
+        subdir = region.get("subdir")
+        label = region.get("label") or name
+
+        df_reg = df_match if filtr is None else filtr(df_match)
+        if df_reg.empty:
+            print(f"[warn] No rows for region '{name}', skipping charts.")
             continue
+
         rels = set()
-        for rel_set in build_farm_rel_map(prov_df).values():
+        for rel_set in build_farm_rel_map(df_reg).values():
             rels.update(rel_set)
-        slug = slugify_label(province) or "province"
-        prov_dir = province_dir_root
-        prov_dir.mkdir(parents=True, exist_ok=True)
-        avg_path = prov_dir / f"5_chart_avg_animals_by_category_{slug}.png"
+        rel_filter = rels if rels else None
+
+        charts_out = base_charts_dir if subdir is None else base_charts_dir / subdir
+        charts_out.mkdir(parents=True, exist_ok=True)
+
         linked_avg_p, avg_farms_p, ftm_avg_p, ftm_farms_p = compute_avg_animals_per_farm(
-            prov_df, FTM_RAW_ANIMALS, DATA_YEAR, rel_filter=rels if rels else None
+            df_reg, FTM_RAW_ANIMALS, DATA_YEAR, rel_filter=rel_filter
         )
-        plot_chart5_avg_animals(linked_avg_p, avg_farms_p, ftm_avg_p, ftm_farms_p, avg_path, region_label=province)
+        avg_filename = (
+            CHART_FILES["avg_animals_per_farm"] if subdir is None else f"5_chart_avg_animals_by_category_{slugify_label(label)}.png"
+        )
+        avg_path = charts_out / avg_filename
+        plot_chart5_avg_animals(linked_avg_p, avg_farms_p, ftm_avg_p, ftm_farms_p, avg_path, region_label=label if subdir else None)
         print(
-            f"[province] Saved avg animals chart for {province} to {avg_path} "
+            f"[region] Saved avg animals chart for {name} to {avg_path} "
             f"(linked farms: {avg_farms_p}, ftm farms: {ftm_farms_p})."
         )
 
-        stage_counts_p, stage_farms_p = compute_stage_animal_counts(prov_df)
-        stage_path = prov_dir / f"8_chart_animals_by_stage_{slug}.png"
-        plot_chart4_stage_animals(stage_counts_p, stage_farms_p, stage_path, region_label=province)
+        stage_counts_p, stage_farms_p = compute_stage_animal_counts(df_reg)
+        stage_filename = CHART_FILES["animals_by_stage"] if subdir is None else f"8_chart_animals_by_stage_{slugify_label(label)}.png"
+        stage_path = charts_out / stage_filename
+        plot_chart4_stage_animals(stage_counts_p, stage_farms_p, stage_path, region_label=label if subdir else None)
         print(
-            f"[province] Saved stage animals chart for {province} to {stage_path} "
+            f"[region] Saved stage animals chart for {name} to {stage_path} "
             f"(farms with animals: {stage_farms_p})."
         )
 
@@ -1304,18 +1324,12 @@ def parse_args() -> argparse.Namespace:
         default=CHARTS_DIR,
         help="Base directory where charts will be written.",
     )
-    parser.add_argument(
-        "--province-charts",
-        nargs="*",
-        default=["Gelderland"],
-        help="Province names to generate extra charts (avg animals and stage animals) for that subset.",
-    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    generate_charts(args.master, args.charts_dir, province_charts=args.province_charts)
+    generate_charts(args.master, args.charts_dir)
 
 
 if __name__ == "__main__":
