@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import datetime
 from pathlib import Path
 from typing import Dict, Tuple
@@ -12,6 +13,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from matplotlib.collections import PatchCollection
 import pandas as pd
 from PIL import Image
 import textwrap
@@ -38,6 +40,7 @@ CHART_FILES = {
     "animals_by_stage": "8_chart_animals_by_stage.png",
     "definitive_progress": "9_chart_definitive_progress.png",
     "overview": "chart_all.png",
+    "province_definitive_map": "10_chart_definitive_by_province.png",
 }
 ALL_CHART_FILENAMES = set(CHART_FILES.values())
 
@@ -62,6 +65,36 @@ def load_woonplaatsen_map(csv_path: Path) -> dict[str, str]:
     df["plaats_norm"] = df["plaats"].astype(str).str.strip().str.lower()
     df["prov_clean"] = df["provincie"].astype(str).str.strip()
     return dict(zip(df["plaats_norm"], df["prov_clean"]))
+
+
+def load_province_shapes(osm_json_path: Path) -> list[dict]:
+    """Load province geometries from an Overpass JSON response (relations with outer way geometries)."""
+    if not osm_json_path.exists():
+        return []
+    try:
+        data = json.load(open(osm_json_path))
+    except Exception:
+        return []
+    shapes = []
+    for el in data.get("elements", []):
+        if el.get("type") != "relation":
+            continue
+        name = el.get("tags", {}).get("name", "")
+        polys = []
+        for member in el.get("members", []):
+            if member.get("type") != "way":
+                continue
+            if member.get("role") not in {"outer", "enclave"}:
+                continue
+            coords = member.get("geometry", [])
+            if not coords:
+                continue
+            poly = [(pt["lon"], pt["lat"]) for pt in coords if "lon" in pt and "lat" in pt]
+            if poly:
+                polys.append(poly)
+        if polys:
+            shapes.append({"name": name, "polygons": polys})
+    return shapes
 
 
 # Shared styling so future charts stay consistent
@@ -339,6 +372,68 @@ def attach_province(df: pd.DataFrame, place_to_province: dict[str, str]) -> pd.D
     df = df.copy()
     df["Province"] = df.apply(resolve, axis=1)
     return df
+
+
+def plot_province_definitive_map(
+    counts: dict[str, int],
+    shapes: list[dict],
+    output_path: Path,
+) -> None:
+    """Draw a simple province map colored by definitive counts, using OSM polygons."""
+    if not shapes:
+        print("[warn] No province shapes available; skipping province map.")
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Normalize counts by province name
+    norm_counts = {normalize_province(k): v for k, v in counts.items()}
+    patches_list = []
+    colors = []
+    centroids = []
+
+    max_count = max(norm_counts.values()) if norm_counts else 0
+    cmap = plt.cm.Blues
+
+    for shape in shapes:
+        name = shape.get("name", "")
+        key = normalize_province(name)
+        value = norm_counts.get(key, 0)
+        polys = shape.get("polygons", [])
+        for poly in polys:
+            patch = patches.Polygon(poly, closed=True, linewidth=0.5, edgecolor="#555555")
+            patches_list.append(patch)
+            colors.append(value)
+            # simple centroid
+            xs = [p[0] for p in poly]
+            ys = [p[1] for p in poly]
+            if xs and ys:
+                centroids.append((sum(xs) / len(xs), sum(ys) / len(ys), name, value))
+
+    fig, ax = plt.subplots(figsize=(8, 10))
+    collection = PatchCollection(patches_list, cmap=cmap, linewidths=0.5, edgecolor="#555555")
+    if max_count > 0:
+        collection.set_array(pd.Series(colors))
+        collection.set_clim(0, max_count)
+    else:
+        collection.set_array(pd.Series([0 for _ in colors]))
+    ax.add_collection(collection)
+    ax.autoscale_view()
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    # Annotate with counts
+    for x, y, name, val in centroids:
+        ax.text(x, y, f"{val}", ha="center", va="center", fontsize=9, color="#111111")
+
+    cbar = fig.colorbar(collection, ax=ax, fraction=0.036, pad=0.02)
+    cbar.set_label("Aantal definitieve besluiten")
+
+    title = "Chart 10: Definitieve besluiten per provincie"
+    ax.set_title(wrap_title(title), fontsize=STYLE["title_fontsize"], pad=float(STYLE["title_pad"]))
+    add_subtitle(fig, SUBTITLE_TEXT)
+
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
 
 
 def compute_company_categories(master_df: pd.DataFrame, raw_animals_path: Path, year: int) -> Tuple[pd.Series, int]:
@@ -1258,12 +1353,21 @@ def generate_charts(
         f"(participants: {participants_def}/{participants_total}, animals: {animals_def}/{animals_total})."
     )
 
+    # Province map of definitive decisions
+    prov_shapes = load_province_shapes(PROCESSED_DIR.parent / "raw" / "provinces.geojson")
+    prov_df = df_year[df_year["stage_latest_llm"] == "definitive_decision"].copy()
+    prov_df["prov_norm"] = prov_df["Province"].apply(normalize_province)
+    prov_counts = prov_df.groupby("prov_norm")["farm_id"].nunique().to_dict()
+    map_path = charts_dir / CHART_FILES["province_definitive_map"]
+    plot_province_definitive_map(prov_counts, prov_shapes, map_path)
+    if prov_shapes:
+        print(f"Saved province definitive map to {map_path}.")
+
     overview_path = combine_charts(charts_dir, CHART_FILES["overview"])
     print(f"Combined overview saved to {overview_path}.")
 
     # Regional variants (national + optional subset regions)
     regions = regions or [
-        {"name": "NL", "filter": None, "subdir": None, "label": None},
         {"name": "Gelderland", "filter": lambda df: filter_by_province(df, "Gelderland"), "subdir": "gelderland", "label": "Gelderland"},
     ]
     base_charts_dir = charts_dir
