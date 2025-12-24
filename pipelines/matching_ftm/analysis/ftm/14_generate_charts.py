@@ -467,7 +467,7 @@ def plot_province_definitive_vs_rvo(df: pd.DataFrame, output_path: Path) -> None
         ax.text(x, y_pos, f"{p:.1f}% ({d}/{t})", va="center", ha="left", fontsize=9, color="#111111")
 
     fig.tight_layout()
-    add_subtitle(fig, SUBTITLE_TEXT)
+    add_subtitle(fig, SUBTITLE_TEXT + "\nIn november waren er nog 1023 deelnemers, dat de RVO op verzoek van FTM uitsplitste per provincie. In december daalde het totaal aantal deelnemers verder tot 988. De RVO kon dat getal voor publicatie van dit verhaal niet uitsplitsen.")
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -514,7 +514,7 @@ def plot_province_known_vs_rvo(df: pd.DataFrame, output_path: Path) -> None:
         ax.text(x, y_pos, f"{p:.1f}% ({k}/{t})", va="center", ha="left", fontsize=9, color="#111111")
 
     fig.tight_layout()
-    add_subtitle(fig, SUBTITLE_TEXT)
+    add_subtitle(fig, SUBTITLE_TEXT + "\nIn november waren er nog 1023 deelnemers, dat de RVO op verzoek van FTM uitsplitste per provincie. In december daalde het totaal aantal deelnemers verder tot 988. De RVO kon dat getal voor publicatie van dit verhaal niet uitsplitsen.")
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
