@@ -158,10 +158,8 @@ for prov in sorted(farm_latest["Instantie_latest"].unique()):
 
 info "Step 07: sync participants to matching pipelines"
 DEST_DIR_FTM="$REPO_ROOT/pipelines/matching_ftm/data/raw"
-DEST_DIR_NRC="$REPO_ROOT/pipelines/matching_nrc/data/raw"
-mkdir -p "$DEST_DIR_FTM" "$DEST_DIR_NRC"
+mkdir -p "$DEST_DIR_FTM"
 cp data/06_deelnemers_lbv_lbvplus.csv "$DEST_DIR_FTM/06_deelnemers_lbv_lbvplus.csv"
-cp data/06_deelnemers_lbv_lbvplus.csv "$DEST_DIR_NRC/06_deelnemers_lbv_lbvplus.csv"
-info "Synced to $DEST_DIR_FTM/06_deelnemers_lbv_lbvplus.csv and $DEST_DIR_NRC/06_deelnemers_lbv_lbvplus.csv for downstream matching pipelines"
+info "Synced to $DEST_DIR_FTM/06_deelnemers_lbv_lbvplus.csv for downstream matching pipeline"
 
 info "Pipeline complete"

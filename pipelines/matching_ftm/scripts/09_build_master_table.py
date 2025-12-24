@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Set
 import re
 from collections import defaultdict
+import pandas as pd
 
 PIPE_ROOT = Path(__file__).resolve().parents[1]  # pipelines/matching_ftm
 RAW_DIR = PIPE_ROOT / "data" / "raw"
@@ -14,6 +15,7 @@ PROCESSED_DIR = PIPE_ROOT / "data" / "processed"
 
 MASTER_PATH = PROCESSED_DIR / "master_permits.csv"
 EXCLUDE_FOS_FARMS = {"FARM0082"}  # user-specified exclusions for fosfaat fallback
+WOONPLAATSEN_CSV = RAW_DIR / "woonplaatsen.csv"
 
 # link_method labels
 METHOD_UNLINKED = "niet_gelinkt"
@@ -159,7 +161,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--year",
         type=str,
-        default="2022",
+        default="2021",
         help="Animal count year to keep in master.",
     )
     parser.add_argument(
@@ -215,14 +217,34 @@ def load_clusters(path: Path) -> Dict[str, dict]:
     return mapping
 
 
+def load_woonplaatsen(path: Path) -> tuple[Dict[str, str], set]:
+    """Map normalized place name to province (proper-cased) and return ambiguous names set."""
+    if not path.exists():
+        return {}, set()
+    df = pd.read_csv(path, sep=";", skiprows=5, header=None, names=["plaats", "gemeente", "provincie"])
+    df = df.dropna(subset=["plaats", "provincie"])
+    df["plaats_norm"] = df["plaats"].astype(str).str.strip().str.lower()
+    df["prov_clean"] = df["provincie"].astype(str).str.strip()
+    mapping = dict(zip(df["plaats_norm"], df["prov_clean"]))
+    ambiguous = set(df.groupby("plaats_norm")["prov_clean"].nunique().loc[lambda s: s > 1].index)
+    # also add dash->space variants for hamlets that may be written with hyphens
+    for plaats_norm, prov in list(mapping.items()):
+        alt = plaats_norm.replace("-", " ")
+        if alt:
+            if alt not in mapping:
+                mapping[alt] = prov
+            if alt in ambiguous:
+                ambiguous.add(alt)
+    return mapping, ambiguous
+
+
 def main() -> None:
     args = parse_args()
     permit_rows = read_csv(RAW_DIR / "06_deelnemers_lbv_lbvplus.csv")
     join_rows_all = read_csv(args.join)
     join_rows = [r for r in join_rows_all if r.get("jaar") == args.year]
     join_rows = aggregate_animals(join_rows)
-    minfin_join_all = read_csv(args.minfin_join) if args.minfin_join.exists() else []
-    minfin_join = [r for r in minfin_join_all if r.get("jaar") == args.year]
+    minfin_join = read_csv(args.minfin_join) if args.minfin_join.exists() else []
     minfin_join = aggregate_animals(minfin_join)
     crosswalk = load_crosswalk(args.crosswalk)
     clusters = load_clusters(args.cluster)
@@ -242,6 +264,7 @@ def main() -> None:
         key = r.get("normalized_address_key", "")
         if key and key not in ftm_by_addr:
             ftm_by_addr[key] = r
+    woon_map, woon_ambiguous = load_woonplaatsen(WOONPLAATSEN_CSV)
     kvk_hits = load_kvk_results(args.kvk_results)
 
     permit_rel_set = {r.get("rel_anoniem", "") for r in join_rows if r.get("rel_anoniem")}
@@ -279,6 +302,9 @@ def main() -> None:
         "cluster_y_rd",
         "lbv_plus_tot_dep",
         "lbv_plus_rank",
+        "has_animals",
+        "Province",
+        "Province_from_woonplaats",
     ]:
         if extra not in base_fieldnames:
             base_fieldnames.append(extra)
@@ -294,6 +320,41 @@ def main() -> None:
 
     enriched_permits: List[dict] = []
     enriched_minfin: List[dict] = []
+
+    def ensure_year_fields(row: dict) -> None:
+        if not row.get("jaar"):
+            row["jaar"] = args.year
+        if not row.get("gem_jaar"):
+            row["gem_jaar"] = args.year
+
+    def set_has_animals(row: dict) -> None:
+        try:
+            has = float(row.get("gem_aantal_dieren", "") or 0) > 0
+        except Exception:
+            has = False
+        row["has_animals"] = has
+
+    def set_province(row: dict, source: str) -> None:
+        """Use Instantie_latest as province for permit rows; blank for minfin."""
+        if source == "permit":
+            row["Province"] = row.get("Instantie_latest", "") or ""
+        else:
+            row["Province"] = ""
+
+    def set_woonplaats_province(row: dict) -> None:
+        """Fill Province_from_woonplaats using woonplaatsen.csv lookup on B_PLAATS; leave blank if not found."""
+        val = str(row.get("B_PLAATS", "") or "").strip().lower()
+        prov = ""
+        if val:
+            candidates = {val, val.replace("-", " "), val.replace(" ", "-")}
+            for cand in candidates:
+                if cand and cand in woon_ambiguous:
+                    continue
+                if cand and cand in woon_map:
+                    prov = woon_map[cand]
+                    break
+        row["Province_from_woonplaats"] = prov
+
     # Permit-derived rows
     for permit in permit_rows:
         fid = permit.get("farm_id", "")
@@ -356,6 +417,10 @@ def main() -> None:
                                 row[f] = ftm[f]
                         row["rel_anoniem"] = ftm.get("rel_anoniem", "")
                         row["link_method"] = METHOD_PERMIT_KVK_ADDRESS
+            ensure_year_fields(row)
+            set_has_animals(row)
+            set_province(row, "permit")
+            set_woonplaats_province(row)
             enriched_permits.append(row)
             continue
         for match in matches:
@@ -393,6 +458,10 @@ def main() -> None:
                     row["link_method"] = METHOD_PERMIT_KVK_ADDRESS
                 else:
                     row["link_method"] = METHOD_UNLINKED
+            ensure_year_fields(row)
+            set_has_animals(row)
+            set_province(row, "permit")
+            set_woonplaats_province(row)
             enriched_permits.append(row)
 
     # MinFin-derived rows
@@ -437,6 +506,10 @@ def main() -> None:
                         linked = True
             if not linked:
                 row["link_method"] = METHOD_UNLINKED
+        ensure_year_fields(row)
+        set_has_animals(row)
+        set_province(row, "minfin")
+        set_woonplaats_province(row)
         enriched_minfin.append(row)
 
     # attach cluster info if available

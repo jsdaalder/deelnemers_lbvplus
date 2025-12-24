@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -136,13 +137,18 @@ def wrap_title(text: str, width: int | None = None) -> str:
 
 def filter_to_year(df: pd.DataFrame, year: int) -> pd.DataFrame:
     """Filter dataframe to the given year if a year column is present."""
-    year_cols = [col for col in ("gem_jaar", "jaar") if col in df.columns]
+    year_cols = [col for col in ("jaar", "gem_jaar") if col in df.columns]
     if not year_cols:
         return df
-    col = year_cols[0]
-    col_numeric = pd.to_numeric(df[col], errors="coerce")
-    filtered = df[(col_numeric == year) | col_numeric.isna()]
-    return filtered
+    if len(year_cols) == 1:
+        col = year_cols[0]
+        col_numeric = pd.to_numeric(df[col], errors="coerce")
+        return df[(col_numeric == year) | col_numeric.isna()]
+
+    col_a = pd.to_numeric(df[year_cols[0]], errors="coerce")
+    col_b = pd.to_numeric(df[year_cols[1]], errors="coerce")
+    mask = (col_a == year) | (col_b == year) | (col_a.isna() & col_b.isna())
+    return df[mask]
 
 
 def annotate_bar_tops(
@@ -209,8 +215,8 @@ def compute_source_counts(df: pd.DataFrame) -> Tuple[int, int, int, int]:
 
 
 def compute_source_counts_match(df: pd.DataFrame) -> Tuple[int, int, int, int]:
-    """Return permit/minfin/overlap counts for matching (farms with animals only)."""
-    sources = df[df.get("has_animals", False)][["farm_id", "source"]].drop_duplicates()
+    """Return permit/minfin/overlap counts for all farms (regardless of animals)."""
+    sources = df[["farm_id", "source"]].drop_duplicates()
     permit_total = sources[sources["source"] == "permit"]["farm_id"].nunique()
     minfin_total = sources[sources["source"] == "minfin"]["farm_id"].nunique()
     overlap = (sources.groupby("farm_id")["source"].nunique() > 1).sum()
@@ -219,11 +225,9 @@ def compute_source_counts_match(df: pd.DataFrame) -> Tuple[int, int, int, int]:
 
 
 def compute_link_methods(df: pd.DataFrame, total_farms: int) -> Tuple[pd.Series, int]:
-    """Determine one link_method per farm with animals; fill remainder as niet_gelinkt."""
-    usable = df[df.get("has_animals", True)].copy()
-    farms_by_method = usable.assign(link_method=usable["link_method"].fillna(""))[
-        ["farm_id", "link_method"]
-    ].drop_duplicates()
+    """Determine one link_method per farm; tag linked-without-animals separately."""
+    usable = df.copy()
+    farms_by_method = usable.assign(link_method=usable["link_method"].fillna(""))[["farm_id", "link_method", "has_animals"]].drop_duplicates()
     priority = [
         "permit_adres",
         "permit_kvk_adres",
@@ -233,18 +237,28 @@ def compute_link_methods(df: pd.DataFrame, total_farms: int) -> Tuple[pd.Series,
         "niet_gelinkt",
     ]
 
-    def pick_method(group: pd.DataFrame) -> str:
-        methods = set(group["link_method"])
+    def pick_method(methods: list[str]) -> str:
+        method_set = set(methods)
         for p in priority:
-            if p in methods:
+            if p in method_set:
                 return p
-        for val in group["link_method"]:
+        for val in methods:
             if val:
                 return val
         return "niet_gelinkt"
 
-    method_per_farm = farms_by_method.groupby("farm_id").apply(pick_method)
-    counts = method_per_farm.value_counts()
+    method_per_farm = farms_by_method.groupby("farm_id")["link_method"].agg(list).reset_index()
+    method_per_farm["link_method"] = method_per_farm["link_method"].apply(pick_method)
+    # annotate has_animals per farm
+    animals_flag = usable.groupby("farm_id")["has_animals"].max().reset_index().rename(columns={"has_animals": "has_animals_flag"})
+    method_per_farm = method_per_farm.merge(animals_flag, on="farm_id", how="left")
+    method_per_farm["link_method"] = method_per_farm.apply(
+        lambda r: "gelinkt_zonder_dieren"
+        if not r.get("has_animals_flag", False) and r["link_method"] != "niet_gelinkt"
+        else r["link_method"],
+        axis=1,
+    )
+    counts = method_per_farm["link_method"].value_counts()
     linked_farms = len(method_per_farm)
     missing = max(total_farms - linked_farms, 0)
     if missing > 0:
@@ -277,18 +291,66 @@ def compute_animal_counts(df: pd.DataFrame) -> Tuple[pd.Series, int]:
     return totals, len(linked_farms)
 
 
-def compute_stage_animal_counts(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
-    """Sum animals for farms with draft/definitive decision by category."""
+def compute_stage_animal_counts(
+    df: pd.DataFrame, raw_animals_path: Path = FTM_RAW_ANIMALS, year: int = DATA_YEAR
+) -> Tuple[pd.DataFrame, int]:
+    """Sum animals for farms with definitive decision by category; fallback to raw FTM if master lacks animal rows."""
     stage_filter = {"definitive_decision"}
     subset = df[df["stage_latest_llm"].isin(stage_filter)].copy()
-    subset["rav_code"] = subset["rav_code"].astype(str).str.upper()
-    subset["gem_aantal_dieren"] = pd.to_numeric(subset["gem_aantal_dieren"], errors="coerce")
+    subset["rav_code"] = subset.get("rav_code", "").astype(str).str.upper()
+    subset["gem_aantal_dieren"] = pd.to_numeric(subset.get("gem_aantal_dieren", 0), errors="coerce")
     subset["category"] = subset["rav_code"].map(map_rav_category)
     subset = subset.dropna(subset=["gem_aantal_dieren"])
     subset = subset[subset["category"] != ""]
     subset = subset[subset["gem_aantal_dieren"] > 0]
-    linked_farms = subset["farm_id"].nunique()
 
+    if subset.empty:
+        # Fallback: use raw FTM animals by rel for farms in subset
+        rel_map = build_farm_rel_map(df[df["stage_latest_llm"].isin(stage_filter)])
+        if not rel_map:
+            empty = pd.DataFrame(
+                0,
+                index=["kalkoenen", "kippen", "rundvee (excl. kalveren)", "vleeskalveren", "varkens", "geiten"],
+                columns=["definitive_decision", "draft_decision"],
+            )
+            return empty, 0
+        raw = pd.read_csv(raw_animals_path)
+        raw = raw[raw["gem_jaar"] == year]
+        raw["rav_code"] = raw["rav_code"].astype(str).str.upper()
+        raw["gem_aantal_dieren"] = pd.to_numeric(raw["gem_aantal_dieren"], errors="coerce")
+        raw = raw[raw["gem_aantal_dieren"] > 0]
+        raw["category"] = raw["rav_code"].map(map_rav_category)
+        raw = raw[raw["category"] != ""]
+
+        rows = []
+        farms_with_animals = set()
+        for fid, rels in rel_map.items():
+            if not rels:
+                continue
+            subset_raw = raw[raw["rel_anoniem"].astype(str).isin(rels)]
+            if subset_raw.empty:
+                continue
+            farms_with_animals.add(fid)
+            sums = subset_raw.groupby("category")["gem_aantal_dieren"].sum()
+            for cat, val in sums.items():
+                rows.append({"category": cat, "stage_latest_llm": "definitive_decision", "gem_aantal_dieren": val})
+        if rows:
+            fallback_df = pd.DataFrame(rows)
+            stage_category = (
+                fallback_df.groupby(["category", "stage_latest_llm"])["gem_aantal_dieren"].sum().unstack(fill_value=0)
+            )
+        else:
+            stage_category = pd.DataFrame()
+        stage_category = stage_category.reindex(
+            ["kalkoenen", "kippen", "rundvee (excl. kalveren)", "vleeskalveren", "varkens", "geiten"],
+            fill_value=0,
+        )
+        stage_category = stage_category.reindex(columns=["definitive_decision", "draft_decision"], fill_value=0).astype(
+            int
+        )
+        return stage_category, len(farms_with_animals)
+
+    linked_farms = subset["farm_id"].nunique()
     stage_category = subset.groupby(["category", "stage_latest_llm"])["gem_aantal_dieren"].sum().unstack(fill_value=0)
     stage_category = stage_category.reindex(
         ["kalkoenen", "kippen", "rundvee (excl. kalveren)", "vleeskalveren", "varkens", "geiten"],
@@ -643,10 +705,7 @@ def compute_avg_animals_per_farm(
 def compute_permit_stage_links(df: pd.DataFrame) -> pd.DataFrame:
     """Return per-stage totals of unique permit farms and how many have a rel link."""
     permit_df = df[(df["source"] == "permit") & df.get("has_animals", True)].copy()
-    year_cols = [col for col in ("gem_jaar", "jaar") if col in permit_df.columns]
-    if year_cols:
-        col = year_cols[0]
-        permit_df = permit_df[pd.to_numeric(permit_df[col], errors="coerce") == DATA_YEAR]
+    permit_df = filter_to_year(permit_df, DATA_YEAR)
     stages = ["receipt_of_application", "draft_decision", "definitive_decision"]
     rows = []
     for stage in stages:
@@ -866,7 +925,9 @@ def plot_chart1_venn_data_sources(
     plt.close(fig)
 
 
-def plot_chart2_link_methods(method_counts: pd.Series, total_farms: int, output_path: Path) -> None:
+def plot_chart2_link_methods(
+    method_counts: pd.Series, total_farms: int, output_path: Path, linked_without_animals: int | None = None
+) -> None:
     """Pie chart for link methods with linked total in the title."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -910,8 +971,13 @@ def plot_chart2_link_methods(method_counts: pd.Series, total_farms: int, output_
     if not sizes:
         raise SystemExit("No link-method data to plot.")
 
+    sizes_iter = iter(sizes)
+
     def autopct(pct: float) -> str:
-        count = int(round(pct / 100.0 * total_farms))
+        try:
+            count = next(sizes_iter)
+        except StopIteration:
+            count = round(pct / 100.0 * total_farms)
         return f"{pct:.1f}%\n({count})"
 
     fig, ax = plt.subplots(figsize=STYLE["pie_figsize"])
@@ -923,21 +989,26 @@ def plot_chart2_link_methods(method_counts: pd.Series, total_farms: int, output_
         startangle=120,
         textprops={"fontsize": 10},
     )
-    ax.set_title(
-        wrap_title(
-            f"Chart 2: Van de {total_farms} unieke bedrijven hebben we er {linked_total} kunnen linken aan onze dataset met dieraantallen"
-        ),
-        fontsize=13,
-        pad=float(STYLE["title_pad"]),
+    linked_with_animals = linked_total - (linked_without_animals or 0)
+    title = (
+        f"Chart 2: Van de {total_farms} unieke bedrijven hebben we er "
+        f"{linked_with_animals} kunnen linken aan onze dataset met dieraantallen "
+        + (f"(+{linked_without_animals} zonder dieren)" if linked_without_animals else "")
     )
+    ax.set_title(wrap_title(title), fontsize=13, pad=float(STYLE["title_pad"]))
     fig.tight_layout()
-    add_subtitle(fig, SUBTITLE_TEXT)
+    extra = ""
+    if linked_without_animals is not None and linked_without_animals > 0:
+        extra = f"\nVan de {linked_total} gelinkte bedrijven hebben {linked_without_animals} geen dieren in FTM {DATA_YEAR}."
+    add_subtitle(fig, SUBTITLE_TEXT + extra)
     add_notes(fig, CATEGORY_DESCRIPTIONS)
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
 
-def plot_chart3_animals_by_category(counts: pd.Series, linked_farms: int, output_path: Path) -> None:
+def plot_chart3_animals_by_category(
+    counts: pd.Series, linked_farms: int, output_path: Path, linked_without_animals: int | None = None
+) -> None:
     """Bar chart showing animal counts per category for linked farms."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -965,7 +1036,10 @@ def plot_chart3_animals_by_category(counts: pd.Series, linked_farms: int, output
     annotate_bar_tops(ax, bars, values, use_log=True)
 
     fig.tight_layout()
-    add_subtitle(fig, SUBTITLE_TEXT)
+    extra = ""
+    if linked_without_animals is not None and linked_without_animals > 0:
+        extra = f"\nEr zijn {linked_without_animals} gelinkte bedrijven zonder dieren in FTM {DATA_YEAR}."
+    add_subtitle(fig, SUBTITLE_TEXT + extra)
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -1338,11 +1412,6 @@ def generate_charts(
         df_raw["has_animals"] = False
     df_year = filter_to_year(df_raw, DATA_YEAR).copy()
     df_match = df_year.copy()
-    match_year_cols = [col for col in ("gem_jaar", "jaar") if col in df_match.columns]
-    if match_year_cols:
-        col = match_year_cols[0]
-        year_numeric = pd.to_numeric(df_match[col], errors="coerce")
-        df_match = df_match[year_numeric == DATA_YEAR].copy()
 
     # Determine farms with animals in FTM for this year (using 2021-only matching set)
     ftm_counts, ftm_linked, farms_with_animals = compute_ftm_linked_animals(df_match, FTM_RAW_ANIMALS, DATA_YEAR)
@@ -1350,114 +1419,32 @@ def generate_charts(
     df_year["has_animals"] = df_year["farm_id"].isin(farms_with_animals)
     df_raw["has_animals"] = df_raw["farm_id"].isin(farms_with_animals)
 
+    # --- Compute all metrics first
     permit_total, minfin_total, overlap, unique_total = compute_source_counts_match(df_match)
-    venn_path = charts_dir / CHART_FILES["venn"]
-    plot_chart1_venn_data_sources(permit_total, minfin_total, overlap, unique_total, venn_path)
-    print(
-        f"Saved Venn diagram to {venn_path} "
-        f"(permit: {permit_total}, minfin: {minfin_total}, overlap: {overlap}, unique: {unique_total})."
-    )
-
-    # Chart 2 should use the same population as chart 1 (matching set), and then show link success
     method_counts, total_farms = compute_link_methods(df_match, unique_total)
-    chart2_path = charts_dir / CHART_FILES["link_methods"]
-    plot_chart2_link_methods(method_counts, total_farms, chart2_path)
     linked_total = total_farms - method_counts.get("niet_gelinkt", 0)
-    print(
-        f"Saved link-method pie to {chart2_path} "
-        f"(linked: {linked_total}/{total_farms}, unlinked: {method_counts.get('niet_gelinkt', 0)})."
-    )
-
-    chart3_path = charts_dir / CHART_FILES["animals_by_category"]
-    plot_chart3_animals_by_category(ftm_counts, ftm_linked, chart3_path)
-    print(f"Saved animal category bar chart to {chart3_path} (linked farms: {ftm_linked}, source: FTM {DATA_YEAR}).")
+    linked_without_animals = max(linked_total - ftm_linked, 0)
 
     company_counts, company_total = compute_company_categories(df_match, FTM_RAW_ANIMALS, DATA_YEAR)
-    chart4_path = charts_dir / CHART_FILES["companies_by_category"]
-    plot_chart4_companies_by_category(company_counts, company_total, chart4_path)
-    print(
-        f"Saved company category bar chart to {chart4_path} "
-        f"(companies: {company_total}, categories: {company_counts.index.tolist()})."
-    )
-
     linked_avg, avg_farms, ftm_avg, ftm_farms = compute_avg_animals_per_farm(df_match, FTM_RAW_ANIMALS, DATA_YEAR)
-    chart5a_path = charts_dir / CHART_FILES["avg_animals_per_farm"]
-    plot_chart5_avg_animals(linked_avg, avg_farms, ftm_avg, ftm_farms, chart5a_path)
-    print(
-        f"Saved average animals per farm chart to {chart5a_path} "
-        f"(linked farms: {avg_farms}, ftm farms: {ftm_farms}, categories: {linked_avg.index.tolist()})."
-    )
-
     stage_link_df = compute_permit_stage_links(df_year)
-    chart4_path = charts_dir / CHART_FILES["permit_stages"]
-    plot_chart4_permit_stages(stage_link_df, chart4_path)
-    print(
-        f"Saved permit stage chart to {chart4_path} "
-        f"(stages: {stage_link_df.index.tolist()})."
-    )
-
-    stage_counts, stage_farms = compute_stage_animal_counts(df_match)
-    chart8_path = charts_dir / CHART_FILES["animals_by_stage"]
-    plot_chart4_stage_animals(stage_counts, stage_farms, chart8_path)
-    print(
-        f"Saved stage stacked bar to {chart8_path} (farms with stage+animals: {stage_farms}, "
-        f"categories: {stage_counts.index.tolist()})."
-    )
-
+    stage_counts, stage_farms = compute_stage_animal_counts(df_match, FTM_RAW_ANIMALS, DATA_YEAR)
     buyout_df = compute_buyout_share(df_match, FTM_RAW_ANIMALS, DATA_YEAR)
-    chart6_path = charts_dir / CHART_FILES["buyout_share"]
-    plot_chart5_buyout_share(buyout_df, chart6_path)
-    print(
-        f"Saved buyout share chart to {chart6_path} "
-        f"(categories: {buyout_df.index.tolist()}, total_buyout_animals: {int(buyout_df['buyout'].sum())})."
-    )
 
-    # Chart 9: definitive progress (participants and animals)
     animals_def = int(stage_counts["definitive_decision"].sum())
     animals_total = int(buyout_df["buyout"].sum())
     participants_def = int(stage_link_df.at["definitive_decision", "total"]) if "definitive_decision" in stage_link_df.index else 0
     participants_total = int(stage_link_df["total"].sum())
     pct_participants = 0 if participants_total == 0 else participants_def / participants_total * 100
     pct_animals = 0 if animals_total == 0 else animals_def / animals_total * 100
-    chart8_path = charts_dir / CHART_FILES["definitive_progress"]
-    plot_chart8_definitive_progress(
-        pct_participants,
-        pct_animals,
-        participants_def,
-        participants_total,
-        animals_def,
-        animals_total,
-        chart8_path,
-    )
-    print(
-        f"Saved definitive progress chart to {chart8_path} "
-        f"(participants: {participants_def}/{participants_total}, animals: {animals_def}/{animals_total})."
-    )
 
-    prov_df = df_year[df_year["stage_latest_llm"] == "definitive_decision"].copy()
-    prov_df["prov_norm"] = prov_df["Province"].apply(normalize_province)
-    prov_counts = prov_df.groupby("prov_norm")["farm_id"].nunique().to_dict()
-    # RVO comparison (participants vs definitive and participants vs known)
     rvo_comp = compute_rvo_comparison(df_year, RVO_OVERVIEW_XLSX)
-    rvo_def_chart = charts_dir / CHART_FILES["province_definitive_vs_rvo"]
-    plot_province_definitive_vs_rvo(rvo_comp, rvo_def_chart)
-    if not rvo_comp.empty:
-        print(f"Saved province definitive vs RVO chart to {rvo_def_chart}.")
 
-    rvo_known_chart = charts_dir / CHART_FILES["province_known_vs_rvo"]
-    plot_province_known_vs_rvo(rvo_comp, rvo_known_chart)
-    if not rvo_comp.empty:
-        print(f"Saved province known vs RVO chart to {rvo_known_chart}.")
-
-    overview_path = combine_charts(charts_dir, CHART_FILES["overview"])
-    print(f"Combined overview saved to {overview_path}.")
-
-    # Regional variants (national + optional subset regions)
+    # Regional metrics (for later plotting)
     regions = regions or [
         {"name": "Gelderland", "filter": lambda df: filter_by_province(df, "Gelderland"), "subdir": "gelderland", "label": "Gelderland"},
     ]
-    base_charts_dir = charts_dir
-
+    region_data: Dict[str, dict] = {}
     for region in regions:
         name = region.get("name")
         filtr = region.get("filter")
@@ -1466,19 +1453,200 @@ def generate_charts(
 
         df_reg = df_match if filtr is None else filtr(df_match)
         if df_reg.empty:
-            print(f"[warn] No rows for region '{name}', skipping charts.")
             continue
+        buyout_reg = compute_buyout_share(df_reg, FTM_RAW_ANIMALS, DATA_YEAR)
+        stage_counts_p, stage_farms_p = compute_stage_animal_counts(df_reg, FTM_RAW_ANIMALS, DATA_YEAR)
+        region_data[name] = {
+            "subdir": subdir,
+            "label": label,
+            "buyout": buyout_reg.reset_index().rename(columns={"index": "category"}).to_dict(orient="records"),
+            "buyout_farms": int(buyout_reg.attrs.get("buyout_farms", 0)),
+            "stage_animals": stage_counts_p.reset_index().rename(columns={"index": "category"}).to_dict(orient="records"),
+            "stage_farms": int(stage_farms_p),
+        }
 
-        rels = set()
-        for rel_set in build_farm_rel_map(df_reg).values():
-            rels.update(rel_set)
-        rel_filter = rels if rels else None
+    # Pack metrics into one shareable file
+    chart_data = {
+        "meta": {
+            "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "data_year": DATA_YEAR,
+            "master_path": str(master_path),
+        },
+        "chart1": {
+            "permit_total": int(permit_total),
+            "minfin_total": int(minfin_total),
+            "overlap": int(overlap),
+            "unique_total": int(unique_total),
+        },
+        "chart2": {
+            "method_counts": {k: int(v) for k, v in method_counts.items()},
+            "total_farms": int(total_farms),
+            "linked_total": int(linked_total),
+            "linked_without_animals": int(linked_without_animals),
+        },
+        "chart3": {
+            "counts": {k: int(v) for k, v in ftm_counts.items()},
+            "linked_farms": int(ftm_linked),
+            "linked_without_animals": int(linked_without_animals),
+        },
+        "chart4": {"counts": {k: int(v) for k, v in company_counts.items()}, "total_companies": int(company_total)},
+        "chart5": {
+            "linked_avg": {k: float(v) for k, v in linked_avg.items()},
+            "ftm_avg": {k: float(v) for k, v in ftm_avg.items()},
+            "linked_farms": int(avg_farms),
+            "ftm_farms": int(ftm_farms),
+        },
+        "chart6": {
+            "buyout": buyout_df.reset_index().rename(columns={"index": "category"}).to_dict(orient="records"),
+            "buyout_farms": int(buyout_df.attrs.get("buyout_farms", 0)),
+        },
+        "chart7": {"stages": stage_link_df.reset_index().rename(columns={"index": "stage"}).to_dict(orient="records")},
+        "chart8": {
+            "stage_animals": stage_counts.reset_index().rename(columns={"index": "category"}).to_dict(orient="records"),
+            "stage_farms": int(stage_farms),
+        },
+        "chart9": {
+            "participants_def": int(participants_def),
+            "participants_total": int(participants_total),
+            "animals_def": int(animals_def),
+            "animals_total": int(animals_total),
+            "pct_participants": float(pct_participants),
+            "pct_animals": float(pct_animals),
+        },
+        "rvo_comparison": rvo_comp.to_dict(orient="records"),
+        "regions": region_data,
+    }
+    chart_data_path = charts_dir / "chart_data.json"
+    chart_data_path.write_text(json.dumps(chart_data, indent=2, ensure_ascii=False))
+    print(f"Saved chart data to {chart_data_path} (all numbers used by the charts).")
 
+    # Reload the shareable data and generate charts from that file
+    chart_data = json.loads(chart_data_path.read_text())
+
+    c1 = chart_data["chart1"]
+    permit_total = int(c1["permit_total"])
+    minfin_total = int(c1["minfin_total"])
+    overlap = int(c1["overlap"])
+    unique_total = int(c1["unique_total"])
+
+    venn_path = charts_dir / CHART_FILES["venn"]
+    plot_chart1_venn_data_sources(permit_total, minfin_total, overlap, unique_total, venn_path)
+    print(
+        f"Saved Venn diagram to {venn_path} "
+        f"(permit: {permit_total}, minfin: {minfin_total}, overlap: {overlap}, unique: {unique_total})."
+    )
+
+    c2 = chart_data["chart2"]
+    method_counts = pd.Series(c2["method_counts"])
+    total_farms = int(c2["total_farms"])
+    linked_total = int(c2.get("linked_total", total_farms - method_counts.get("niet_gelinkt", 0)))
+    linked_without_animals = int(c2.get("linked_without_animals", 0))
+    chart2_path = charts_dir / CHART_FILES["link_methods"]
+    plot_chart2_link_methods(method_counts, total_farms, chart2_path, linked_without_animals=linked_without_animals)
+    print(
+        f"Saved link-method pie to {chart2_path} "
+        f"(linked: {linked_total}/{total_farms}, unlinked: {method_counts.get('niet_gelinkt', 0)})."
+    )
+
+    c3 = chart_data["chart3"]
+    ftm_counts = pd.Series(c3["counts"])
+    ftm_linked = int(c3["linked_farms"])
+    linked_without_animals = int(c3.get("linked_without_animals", 0))
+    chart3_path = charts_dir / CHART_FILES["animals_by_category"]
+    plot_chart3_animals_by_category(ftm_counts, ftm_linked, chart3_path, linked_without_animals=linked_without_animals)
+    print(f"Saved animal category bar chart to {chart3_path} (linked farms: {ftm_linked}, source: FTM {DATA_YEAR}).")
+
+    c4 = chart_data["chart4"]
+    company_counts = pd.Series(c4["counts"])
+    company_total = int(c4["total_companies"])
+    chart4_path = charts_dir / CHART_FILES["companies_by_category"]
+    plot_chart4_companies_by_category(company_counts, company_total, chart4_path)
+    print(
+        f"Saved company category bar chart to {chart4_path} "
+        f"(companies: {company_total}, categories: {company_counts.index.tolist()})."
+    )
+
+    c5 = chart_data["chart5"]
+    linked_avg = pd.Series(c5["linked_avg"])
+    ftm_avg = pd.Series(c5["ftm_avg"])
+    avg_farms = int(c5["linked_farms"])
+    ftm_farms = int(c5["ftm_farms"])
+    chart5a_path = charts_dir / CHART_FILES["avg_animals_per_farm"]
+    plot_chart5_avg_animals(linked_avg, avg_farms, ftm_avg, ftm_farms, chart5a_path)
+    print(
+        f"Saved average animals per farm chart to {chart5a_path} "
+        f"(linked farms: {avg_farms}, ftm farms: {ftm_farms}, categories: {linked_avg.index.tolist()})."
+    )
+
+    c6 = chart_data["chart6"]
+    buyout_df = pd.DataFrame(c6["buyout"]).set_index("category")
+    buyout_df.attrs["buyout_farms"] = int(c6.get("buyout_farms", 0))
+    chart6_path = charts_dir / CHART_FILES["buyout_share"]
+    plot_chart5_buyout_share(buyout_df, chart6_path)
+    print(
+        f"Saved buyout share chart to {chart6_path} "
+        f"(categories: {buyout_df.index.tolist()}, total_buyout_animals: {int(buyout_df['buyout'].sum())})."
+    )
+
+    c7 = chart_data["chart7"]
+    stage_link_df = pd.DataFrame(c7["stages"]).set_index("stage")
+    chart4_path = charts_dir / CHART_FILES["permit_stages"]
+    plot_chart4_permit_stages(stage_link_df, chart4_path)
+    print(
+        f"Saved permit stage chart to {chart4_path} "
+        f"(stages: {stage_link_df.index.tolist()})."
+    )
+
+    c8 = chart_data["chart8"]
+    stage_counts = pd.DataFrame(c8["stage_animals"]).set_index("category")
+    stage_farms = int(c8["stage_farms"])
+    chart8_path = charts_dir / CHART_FILES["animals_by_stage"]
+    plot_chart4_stage_animals(stage_counts, stage_farms, chart8_path)
+    print(
+        f"Saved stage stacked bar to {chart8_path} (farms with stage+animals: {stage_farms}, "
+        f"categories: {stage_counts.index.tolist()})."
+    )
+
+    c9 = chart_data["chart9"]
+    chart8_path = charts_dir / CHART_FILES["definitive_progress"]
+    plot_chart8_definitive_progress(
+        float(c9["pct_participants"]),
+        float(c9["pct_animals"]),
+        int(c9["participants_def"]),
+        int(c9["participants_total"]),
+        int(c9["animals_def"]),
+        int(c9["animals_total"]),
+        chart8_path,
+    )
+    print(
+        f"Saved definitive progress chart to {chart8_path} "
+        f"(participants: {c9['participants_def']}/{c9['participants_total']}, animals: {c9['animals_def']}/{c9['animals_total']})."
+    )
+
+    rvo_comp_loaded = pd.DataFrame(chart_data.get("rvo_comparison", []))
+    rvo_def_chart = charts_dir / CHART_FILES["province_definitive_vs_rvo"]
+    plot_province_definitive_vs_rvo(rvo_comp_loaded, rvo_def_chart)
+    if not rvo_comp_loaded.empty:
+        print(f"Saved province definitive vs RVO chart to {rvo_def_chart}.")
+
+    rvo_known_chart = charts_dir / CHART_FILES["province_known_vs_rvo"]
+    plot_province_known_vs_rvo(rvo_comp_loaded, rvo_known_chart)
+    if not rvo_comp_loaded.empty:
+        print(f"Saved province known vs RVO chart to {rvo_known_chart}.")
+
+    overview_path = combine_charts(charts_dir, CHART_FILES["overview"])
+    print(f"Combined overview saved to {overview_path}.")
+
+    # Regional variants (from stored data)
+    base_charts_dir = charts_dir
+    for name, reg_data in chart_data.get("regions", {}).items():
+        subdir = reg_data.get("subdir")
+        label = reg_data.get("label") or name
         charts_out = base_charts_dir if subdir is None else base_charts_dir / subdir
         charts_out.mkdir(parents=True, exist_ok=True)
 
-        # Region-specific buyout share (chart 6)
-        buyout_reg = compute_buyout_share(df_reg, FTM_RAW_ANIMALS, DATA_YEAR)
+        buyout_reg = pd.DataFrame(reg_data["buyout"]).set_index("category")
+        buyout_reg.attrs["buyout_farms"] = int(reg_data.get("buyout_farms", 0))
         buyout_filename = CHART_FILES["buyout_share"] if subdir is None else f"6_chart_buyout_share_{slugify_label(label)}.png"
         buyout_path = charts_out / buyout_filename
         plot_chart5_buyout_share(buyout_reg, buyout_path)
@@ -1487,8 +1655,8 @@ def generate_charts(
             f"(categories: {buyout_reg.index.tolist()}, total_buyout_animals: {int(buyout_reg['buyout'].sum())})."
         )
 
-        # Region-specific animals by stage (chart 8)
-        stage_counts_p, stage_farms_p = compute_stage_animal_counts(df_reg)
+        stage_counts_p = pd.DataFrame(reg_data["stage_animals"]).set_index("category")
+        stage_farms_p = int(reg_data["stage_farms"])
         stage_filename = CHART_FILES["animals_by_stage"] if subdir is None else f"8_chart_animals_by_stage_{slugify_label(label)}.png"
         stage_path = charts_out / stage_filename
         plot_chart4_stage_animals(stage_counts_p, stage_farms_p, stage_path, region_label=label if subdir else None)
