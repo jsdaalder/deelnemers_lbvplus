@@ -449,11 +449,14 @@ def plot_province_definitive_vs_rvo(df: pd.DataFrame, output_path: Path) -> None
     ax.set_yticklabels(labels)
     ax.invert_yaxis()
     ax.set_xlabel("Aantal deelnemers (RVO)")
-    ax.set_title(
-        wrap_title("Chart 10: Definitieve besluiten per provincie (t.o.v. RVO deelnemers)"),
-        fontsize=STYLE["title_fontsize"],
-        pad=float(STYLE["title_pad"]),
-    )
+    # Province with highest definitive count (fallback to highest RVO participants if all zero)
+    top_prov = ""
+    if df["definitive"].max() > 0:
+        top_prov = df.loc[df["definitive"].idxmax(), "province"]
+    else:
+        top_prov = df.loc[df["rvo_participants"].idxmax(), "province"]
+    title = f"Chart 10: In {top_prov} zijn de meeste vergunningen al definitief ingetrokken."
+    ax.set_title(wrap_title(title), fontsize=STYLE["title_fontsize"], pad=float(STYLE["title_pad"]))
     ax.grid(axis="x", linestyle="--", alpha=0.3)
     ax.legend(loc="lower right")
 
@@ -481,6 +484,9 @@ def plot_province_known_vs_rvo(df: pd.DataFrame, output_path: Path) -> None:
     remaining = df["remaining_known"].tolist()
     totals = df["rvo_participants"].tolist()
     pct = df["pct_known"].tolist()
+    total_participants = sum(totals)
+    known_total = sum(known)
+    pct_all = (known_total / total_participants * 100) if total_participants else 0.0
 
     y = range(len(labels))
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -491,11 +497,14 @@ def plot_province_known_vs_rvo(df: pd.DataFrame, output_path: Path) -> None:
     ax.set_yticklabels(labels)
     ax.invert_yaxis()
     ax.set_xlabel("Aantal deelnemers (RVO)")
-    ax.set_title(
-        wrap_title("Chart 11: Bekende deelnemers per provincie (t.o.v. RVO deelnemers)"),
-        fontsize=STYLE["title_fontsize"],
-        pad=float(STYLE["title_pad"]),
+    title = (
+        "Chart 11: Van de "
+        + f"{total_participants}"
+        + " deelnemers is "
+        + f"{pct_all:.1f}%"
+        + " al begonnen aan het intrekken van de vergunning. Vooral in Limburg zijn boeren daar al ver mee."
     )
+    ax.set_title(wrap_title(title), fontsize=STYLE["title_fontsize"], pad=float(STYLE["title_pad"]))
     ax.grid(axis="x", linestyle="--", alpha=0.3)
     ax.legend(loc="lower right")
 
