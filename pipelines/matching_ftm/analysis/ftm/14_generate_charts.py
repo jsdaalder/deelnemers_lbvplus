@@ -24,6 +24,7 @@ PROCESSED_DIR = PIPE_ROOT / "data" / "processed"
 CHARTS_DIR = Path(__file__).resolve().parent / "charts"
 FTM_RAW_ANIMALS = PIPE_ROOT / "data" / "raw" / "FTM_dieraantallen.csv"
 WOONPLAATSEN_CSV = PIPE_ROOT / "data" / "raw" / "woonplaatsen.csv"
+RVO_OVERVIEW_XLSX = PIPE_ROOT / "data" / "raw" / "rvo_overview_lbv_lbvplus.xlsx"
 DEFAULT_MASTER = PROCESSED_DIR / "master_participants.csv"
 DATA_YEAR = 2021
 
@@ -364,6 +365,77 @@ def plot_province_definitive_bar(counts: dict[str, int], output_path: Path) -> N
     ax.set_title(wrap_title("Chart 10: Definitieve besluiten per provincie"), fontsize=STYLE["title_fontsize"], pad=float(STYLE["title_pad"]))
     ax.grid(axis="x", linestyle="--", alpha=0.3)
     annotate_bar_tops(ax, bars, values, use_log=False, labels=[str(v) for v in values])
+    fig.tight_layout()
+    add_subtitle(fig, SUBTITLE_TEXT)
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+def compute_rvo_comparison(master_df: pd.DataFrame, rvo_path: Path) -> pd.DataFrame:
+    """Return dataframe with RVO participants, definitive counts (from master), and pct per province."""
+    if not rvo_path.exists():
+        return pd.DataFrame(columns=["province", "rvo_participants", "definitive", "pct"])
+
+    # Definitive counts by province from master (Province already attached from woonplaatsen)
+    df_def = master_df[master_df["stage_latest_llm"] == "definitive_decision"].copy()
+    df_def["prov_norm"] = df_def["Province"].apply(normalize_province)
+    def_counts = df_def.groupby("prov_norm")["farm_id"].nunique().to_dict()
+
+    rvo = pd.read_excel(rvo_path)
+    if "Actuele_deelnemers" not in rvo.columns:
+        return pd.DataFrame(columns=["province", "rvo_participants", "definitive", "pct"])
+
+    # First column holds province name (uppercase)
+    prov_col = rvo.columns[0]
+    rvo["prov_norm"] = rvo[prov_col].apply(normalize_province)
+    rvo["rvo_participants"] = pd.to_numeric(rvo["Actuele_deelnemers"], errors="coerce").fillna(0).astype(int)
+
+    rows = []
+    for _, row in rvo.iterrows():
+        prov_name = str(row[prov_col]).strip().title()
+        norm_name = row["prov_norm"]
+        total = int(row["rvo_participants"])
+        definitive = int(def_counts.get(norm_name, 0))
+        pct = (definitive / total * 100) if total else 0.0
+        rows.append({"province": prov_name, "rvo_participants": total, "definitive": definitive, "pct": pct})
+
+    df = pd.DataFrame(rows)
+    df = df.sort_values("pct", ascending=False)
+    return df
+
+
+def plot_province_definitive_vs_rvo(df: pd.DataFrame, output_path: Path) -> None:
+    """Bar chart comparing definitive decisions vs RVO participant counts per province."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if df.empty:
+        print("[warn] RVO comparison data empty; skipping province bar chart.")
+        return
+
+    labels = df["province"].tolist()
+    definitive = df["definitive"].tolist()
+    totals = df["rvo_participants"].tolist()
+    pct = df["pct"].tolist()
+
+    y = range(len(labels))
+    fig, ax = plt.subplots(figsize=(8, 6))
+    bars = ax.barh(y, pct, color=str(STYLE["color_definitive"]))
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels)
+    ax.invert_yaxis()
+    ax.set_xlabel("Percentage definitief t.o.v. RVO deelnemers")
+    ax.set_title(
+        wrap_title("Chart 10: Definitieve besluiten per provincie (vs. RVO deelnemers)"),
+        fontsize=STYLE["title_fontsize"],
+        pad=float(STYLE["title_pad"]),
+    )
+    ax.grid(axis="x", linestyle="--", alpha=0.3)
+    annotate_bar_tops(
+        ax,
+        bars,
+        pct,
+        use_log=False,
+        labels=[f"{p:.1f}% ({d}/{t})" for p, d, t in zip(pct, definitive, totals)],
+    )
     fig.tight_layout()
     add_subtitle(fig, SUBTITLE_TEXT)
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
@@ -1294,6 +1366,13 @@ def generate_charts(
     plot_province_definitive_bar(prov_counts, map_path)
     if prov_counts:
         print(f"Saved province definitive chart to {map_path}.")
+
+    # RVO comparison (participants vs definitive)
+    rvo_comp = compute_rvo_comparison(df_year, RVO_OVERVIEW_XLSX)
+    rvo_chart = charts_dir / "10b_chart_definitive_vs_rvo.png"
+    plot_province_definitive_vs_rvo(rvo_comp, rvo_chart)
+    if not rvo_comp.empty:
+        print(f"Saved province definitive vs RVO chart to {rvo_chart}.")
 
     overview_path = combine_charts(charts_dir, CHART_FILES["overview"])
     print(f"Combined overview saved to {overview_path}.")
