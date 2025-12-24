@@ -409,6 +409,7 @@ def compute_rvo_comparison(master_df: pd.DataFrame, rvo_path: Path) -> pd.DataFr
 
     df = pd.DataFrame(rows)
     df = df[df["rvo_participants"] > 0]
+    df = df[~df["province"].str.contains("totaal", case=False, na=False)]
     df = df.sort_values("rvo_participants", ascending=False)
     return df
 
@@ -441,11 +442,11 @@ def plot_province_definitive_vs_rvo(df: pd.DataFrame, output_path: Path) -> None
         pad=float(STYLE["title_pad"]),
     )
     ax.grid(axis="x", linestyle="--", alpha=0.3)
-    ax.legend()
+    ax.legend(loc="lower right")
 
     # annotate definitive segment with pct/ratio
     for bar_def, bar_rem, p, d, t in zip(bars_def, bars_remaining, pct, definitive, totals):
-        x = bar_def.get_x() + bar_def.get_width() + bar_rem.get_width() - bar_def.get_width() / 2
+        x = bar_rem.get_width() + bar_def.get_width() + 1.0
         y_pos = bar_def.get_y() + bar_def.get_height() / 2
         ax.text(x, y_pos, f"{p:.1f}% ({d}/{t})", va="center", ha="left", fontsize=9, color="#111111")
 
