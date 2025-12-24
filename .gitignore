@@ -7,6 +7,7 @@ experiments/llm_improvement_testing/*.csv
 *.csv
 *.png
 !final_results/**/*.png
+!pipelines/matching_ftm/analysis/ftm/charts/**/*.png
 **/.~lock.*
 
 # Participants pipeline
@@ -29,7 +30,6 @@ final_results/**/*.csv
 deelnemers_lbv_lbvplus_*.csv
 
 # Analysis outputs
-pipelines/matching_ftm/analysis/ftm/charts/
 
 # Matching pipelines (data/caches/artifacts)
 pipelines/matching_ftm/data/

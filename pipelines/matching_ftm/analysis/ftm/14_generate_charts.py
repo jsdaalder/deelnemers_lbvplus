@@ -410,6 +410,7 @@ def compute_rvo_comparison(master_df: pd.DataFrame, rvo_path: Path) -> pd.DataFr
     df = pd.DataFrame(rows)
     df = df[df["rvo_participants"] > 0]
     df = df[~df["province"].str.contains("totaal", case=False, na=False)]
+    df = df[~df["province"].str.contains("nan", case=False, na=False)]
     df = df.sort_values("rvo_participants", ascending=False)
     return df
 
