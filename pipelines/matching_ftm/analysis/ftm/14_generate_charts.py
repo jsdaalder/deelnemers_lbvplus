@@ -397,15 +397,24 @@ def compute_rvo_comparison(master_df: pd.DataFrame, rvo_path: Path) -> pd.DataFr
         total = int(row["rvo_participants"])
         definitive = int(def_counts.get(norm_name, 0))
         pct = (definitive / total * 100) if total else 0.0
-        rows.append({"province": prov_name, "rvo_participants": total, "definitive": definitive, "pct": pct})
+        rows.append(
+            {
+                "province": prov_name,
+                "rvo_participants": total,
+                "definitive": definitive,
+                "remaining": max(total - definitive, 0),
+                "pct": pct,
+            }
+        )
 
     df = pd.DataFrame(rows)
-    df = df.sort_values("pct", ascending=False)
+    df = df[df["rvo_participants"] > 0]
+    df = df.sort_values("rvo_participants", ascending=False)
     return df
 
 
 def plot_province_definitive_vs_rvo(df: pd.DataFrame, output_path: Path) -> None:
-    """Bar chart comparing definitive decisions vs RVO participant counts per province."""
+    """Stacked bar chart: definitive vs remaining RVO participants per province."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if df.empty:
         print("[warn] RVO comparison data empty; skipping province bar chart.")
@@ -413,29 +422,33 @@ def plot_province_definitive_vs_rvo(df: pd.DataFrame, output_path: Path) -> None
 
     labels = df["province"].tolist()
     definitive = df["definitive"].tolist()
+    remaining = df["remaining"].tolist()
     totals = df["rvo_participants"].tolist()
     pct = df["pct"].tolist()
 
     y = range(len(labels))
     fig, ax = plt.subplots(figsize=(8, 6))
-    bars = ax.barh(y, pct, color=str(STYLE["color_definitive"]))
+    bars_remaining = ax.barh(y, remaining, color=str(STYLE["color_unlinked"]), label="Nog niet definitief")
+    bars_def = ax.barh(y, definitive, left=remaining, color=str(STYLE["color_definitive"]), label="Definitief")
+
     ax.set_yticks(y)
     ax.set_yticklabels(labels)
     ax.invert_yaxis()
-    ax.set_xlabel("Percentage definitief t.o.v. RVO deelnemers")
+    ax.set_xlabel("Aantal deelnemers (RVO)")
     ax.set_title(
-        wrap_title("Chart 10: Definitieve besluiten per provincie (vs. RVO deelnemers)"),
+        wrap_title("Chart 10: Definitieve besluiten per provincie (t.o.v. RVO deelnemers)"),
         fontsize=STYLE["title_fontsize"],
         pad=float(STYLE["title_pad"]),
     )
     ax.grid(axis="x", linestyle="--", alpha=0.3)
-    annotate_bar_tops(
-        ax,
-        bars,
-        pct,
-        use_log=False,
-        labels=[f"{p:.1f}% ({d}/{t})" for p, d, t in zip(pct, definitive, totals)],
-    )
+    ax.legend()
+
+    # annotate definitive segment with pct/ratio
+    for bar_def, bar_rem, p, d, t in zip(bars_def, bars_remaining, pct, definitive, totals):
+        x = bar_def.get_x() + bar_def.get_width() + bar_rem.get_width() - bar_def.get_width() / 2
+        y_pos = bar_def.get_y() + bar_def.get_height() / 2
+        ax.text(x, y_pos, f"{p:.1f}% ({d}/{t})", va="center", ha="left", fontsize=9, color="#111111")
+
     fig.tight_layout()
     add_subtitle(fig, SUBTITLE_TEXT)
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
