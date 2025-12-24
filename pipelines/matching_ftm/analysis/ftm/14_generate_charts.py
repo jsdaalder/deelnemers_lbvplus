@@ -1477,19 +1477,17 @@ def generate_charts(
         charts_out = base_charts_dir if subdir is None else base_charts_dir / subdir
         charts_out.mkdir(parents=True, exist_ok=True)
 
-        linked_avg_p, avg_farms_p, ftm_avg_p, ftm_farms_p = compute_avg_animals_per_farm(
-            df_reg, FTM_RAW_ANIMALS, DATA_YEAR, rel_filter=rel_filter
-        )
-        avg_filename = (
-            CHART_FILES["avg_animals_per_farm"] if subdir is None else f"5_chart_avg_animals_by_category_{slugify_label(label)}.png"
-        )
-        avg_path = charts_out / avg_filename
-        plot_chart5_avg_animals(linked_avg_p, avg_farms_p, ftm_avg_p, ftm_farms_p, avg_path, region_label=label if subdir else None)
+        # Region-specific buyout share (chart 6)
+        buyout_reg = compute_buyout_share(df_reg, FTM_RAW_ANIMALS, DATA_YEAR)
+        buyout_filename = CHART_FILES["buyout_share"] if subdir is None else f"6_chart_buyout_share_{slugify_label(label)}.png"
+        buyout_path = charts_out / buyout_filename
+        plot_chart5_buyout_share(buyout_reg, buyout_path)
         print(
-            f"[region] Saved avg animals chart for {name} to {avg_path} "
-            f"(linked farms: {avg_farms_p}, ftm farms: {ftm_farms_p})."
+            f"[region] Saved buyout share chart for {name} to {buyout_path} "
+            f"(categories: {buyout_reg.index.tolist()}, total_buyout_animals: {int(buyout_reg['buyout'].sum())})."
         )
 
+        # Region-specific animals by stage (chart 8)
         stage_counts_p, stage_farms_p = compute_stage_animal_counts(df_reg)
         stage_filename = CHART_FILES["animals_by_stage"] if subdir is None else f"8_chart_animals_by_stage_{slugify_label(label)}.png"
         stage_path = charts_out / stage_filename
