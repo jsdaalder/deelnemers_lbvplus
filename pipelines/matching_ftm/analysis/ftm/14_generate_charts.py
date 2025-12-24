@@ -39,8 +39,8 @@ CHART_FILES = {
     "permit_stages": "7_chart_permit_stages.png",
     "animals_by_stage": "8_chart_animals_by_stage.png",
     "definitive_progress": "9_chart_definitive_progress.png",
-    "province_definitive_vs_rvo": "10_chart_definitive_vs_rvo.png",
-    "province_known_vs_rvo": "11_chart_known_vs_rvo.png",
+    "province_known_vs_rvo": "10_chart_known_vs_rvo.png",
+    "province_definitive_vs_rvo": "11_chart_definitive_vs_rvo.png",
     "overview": "chart_all.png",
 }
 ALL_CHART_FILENAMES = set(CHART_FILES.values())
@@ -455,7 +455,7 @@ def plot_province_definitive_vs_rvo(df: pd.DataFrame, output_path: Path) -> None
         top_prov = df.loc[df["definitive"].idxmax(), "province"]
     else:
         top_prov = df.loc[df["rvo_participants"].idxmax(), "province"]
-    title = f"Chart 10: In {top_prov} zijn de meeste vergunningen al definitief ingetrokken."
+    title = f"Chart 11: In {top_prov} zijn de meeste vergunningen al definitief ingetrokken."
     ax.set_title(wrap_title(title), fontsize=STYLE["title_fontsize"], pad=float(STYLE["title_pad"]))
     ax.grid(axis="x", linestyle="--", alpha=0.3)
     ax.legend(loc="lower right")
@@ -498,7 +498,7 @@ def plot_province_known_vs_rvo(df: pd.DataFrame, output_path: Path) -> None:
     ax.invert_yaxis()
     ax.set_xlabel("Aantal deelnemers (RVO)")
     title = (
-        "Chart 11: Van alle deelnemers is "
+        "Chart 10: Van alle deelnemers is "
         + f"{pct_all:.1f}%"
         + " al begonnen met het intrekken van de vergunning. Vooral in Limburg zijn boeren daar al ver mee."
     )
