@@ -498,11 +498,9 @@ def plot_province_known_vs_rvo(df: pd.DataFrame, output_path: Path) -> None:
     ax.invert_yaxis()
     ax.set_xlabel("Aantal deelnemers (RVO)")
     title = (
-        "Chart 11: Van de "
-        + f"{total_participants}"
-        + " deelnemers is "
+        "Chart 11: Van alle deelnemers is "
         + f"{pct_all:.1f}%"
-        + " al begonnen aan het intrekken van de vergunning. Vooral in Limburg zijn boeren daar al ver mee."
+        + " al begonnen met het intrekken van de vergunning. Vooral in Limburg zijn boeren daar al ver mee."
     )
     ax.set_title(wrap_title(title), fontsize=STYLE["title_fontsize"], pad=float(STYLE["title_pad"]))
     ax.grid(axis="x", linestyle="--", alpha=0.3)
