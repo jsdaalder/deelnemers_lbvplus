@@ -259,11 +259,12 @@ def main() -> None:
     name_match_farms = load_name_matches(args.name_matches)
     # load FTM address/animals for KVK-based address fallback
     ftm_rows = read_csv(PROCESSED_DIR / "01_FTM_animals_with_addresses.csv")
-    ftm_by_addr: Dict[str, dict] = {}
+    ftm_by_addr: Dict[str, List[dict]] = {}
     for r in ftm_rows:
         key = r.get("normalized_address_key", "")
-        if key and key not in ftm_by_addr:
-            ftm_by_addr[key] = r
+        if not key:
+            continue
+        ftm_by_addr.setdefault(key, []).append(r)
     woon_map, woon_ambiguous = load_woonplaatsen(WOONPLAATSEN_CSV)
     kvk_hits = load_kvk_results(args.kvk_results)
 
@@ -401,22 +402,37 @@ def main() -> None:
                 # no join row: if rel present and kvk present, mark as permit_kvk_adres
                 if row["link_method"] == METHOD_UNLINKED and kvk.get("kvk_api_number", ""):
                     row["link_method"] = METHOD_PERMIT_KVK_ADDRESS
-            else:
-                # try KVK-based address match to FTM
-                if kvk.get("kvk_api_straat") and kvk.get("kvk_api_postcode"):
-                    key = normalize_address(
-                        kvk.get("kvk_api_straat", ""),
-                        kvk.get("kvk_api_huisnummer", ""),
-                        kvk.get("kvk_api_postcode", ""),
-                        kvk.get("kvk_api_plaats", ""),
-                    )
-                    ftm = ftm_by_addr.get(key)
-                    if ftm:
+                ensure_year_fields(row)
+                set_has_animals(row)
+                set_province(row, "permit")
+                set_woonplaats_province(row)
+                enriched_permits.append(row)
+                continue
+
+            # try KVK-based address match to FTM (may yield multiple rel_anoniem values)
+            if kvk.get("kvk_api_straat") and kvk.get("kvk_api_postcode"):
+                key = normalize_address(
+                    kvk.get("kvk_api_straat", ""),
+                    kvk.get("kvk_api_huisnummer", ""),
+                    kvk.get("kvk_api_postcode", ""),
+                    kvk.get("kvk_api_plaats", ""),
+                )
+                ftm_matches = ftm_by_addr.get(key, [])
+                if ftm_matches:
+                    for ftm in ftm_matches:
+                        row_copy = row.copy()
                         for f in ftm:
-                            if f in row and row.get(f, "") == "":
-                                row[f] = ftm[f]
-                        row["rel_anoniem"] = ftm.get("rel_anoniem", "")
-                        row["link_method"] = METHOD_PERMIT_KVK_ADDRESS
+                            if f in row_copy and row_copy.get(f, "") == "":
+                                row_copy[f] = ftm[f]
+                        row_copy["rel_anoniem"] = ftm.get("rel_anoniem", "")
+                        row_copy["link_method"] = METHOD_PERMIT_KVK_ADDRESS
+                        ensure_year_fields(row_copy)
+                        set_has_animals(row_copy)
+                        set_province(row_copy, "permit")
+                        set_woonplaats_province(row_copy)
+                        enriched_permits.append(row_copy)
+                    continue
+
             ensure_year_fields(row)
             set_has_animals(row)
             set_province(row, "permit")

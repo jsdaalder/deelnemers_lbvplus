@@ -294,70 +294,54 @@ def compute_animal_counts(df: pd.DataFrame) -> Tuple[pd.Series, int]:
 def compute_stage_animal_counts(
     df: pd.DataFrame, raw_animals_path: Path = FTM_RAW_ANIMALS, year: int = DATA_YEAR
 ) -> Tuple[pd.DataFrame, int]:
-    """Sum animals for farms with definitive decision by category; fallback to raw FTM if master lacks animal rows."""
+    """Sum animals for definitive decision farms using linked rels (farm-level, raw FTM)."""
     stage_filter = {"definitive_decision"}
-    subset = df[df["stage_latest_llm"].isin(stage_filter)].copy()
-    subset["rav_code"] = subset.get("rav_code", "").astype(str).str.upper()
-    subset["gem_aantal_dieren"] = pd.to_numeric(subset.get("gem_aantal_dieren", 0), errors="coerce")
-    subset["category"] = subset["rav_code"].map(map_rav_category)
-    subset = subset.dropna(subset=["gem_aantal_dieren"])
-    subset = subset[subset["category"] != ""]
-    subset = subset[subset["gem_aantal_dieren"] > 0]
+    stage_df = df[df["stage_latest_llm"].isin(stage_filter)]
+    rel_map = build_farm_rel_map(stage_df)
 
-    if subset.empty:
-        # Fallback: use raw FTM animals by rel for farms in subset
-        rel_map = build_farm_rel_map(df[df["stage_latest_llm"].isin(stage_filter)])
-        if not rel_map:
-            empty = pd.DataFrame(
-                0,
-                index=["kalkoenen", "kippen", "rundvee (excl. kalveren)", "vleeskalveren", "varkens", "geiten"],
-                columns=["definitive_decision", "draft_decision"],
-            )
-            return empty, 0
-        raw = pd.read_csv(raw_animals_path)
-        raw = raw[raw["gem_jaar"] == year]
-        raw["rav_code"] = raw["rav_code"].astype(str).str.upper()
-        raw["gem_aantal_dieren"] = pd.to_numeric(raw["gem_aantal_dieren"], errors="coerce")
-        raw = raw[raw["gem_aantal_dieren"] > 0]
-        raw["category"] = raw["rav_code"].map(map_rav_category)
-        raw = raw[raw["category"] != ""]
-
-        rows = []
-        farms_with_animals = set()
-        for fid, rels in rel_map.items():
-            if not rels:
-                continue
-            subset_raw = raw[raw["rel_anoniem"].astype(str).isin(rels)]
-            if subset_raw.empty:
-                continue
-            farms_with_animals.add(fid)
-            sums = subset_raw.groupby("category")["gem_aantal_dieren"].sum()
-            for cat, val in sums.items():
-                rows.append({"category": cat, "stage_latest_llm": "definitive_decision", "gem_aantal_dieren": val})
-        if rows:
-            fallback_df = pd.DataFrame(rows)
-            stage_category = (
-                fallback_df.groupby(["category", "stage_latest_llm"])["gem_aantal_dieren"].sum().unstack(fill_value=0)
-            )
-        else:
-            stage_category = pd.DataFrame()
-        stage_category = stage_category.reindex(
-            ["kalkoenen", "kippen", "rundvee (excl. kalveren)", "vleeskalveren", "varkens", "geiten"],
-            fill_value=0,
+    if not rel_map:
+        empty = pd.DataFrame(
+            0,
+            index=["kalkoenen", "kippen", "rundvee (excl. kalveren)", "vleeskalveren", "varkens", "geiten"],
+            columns=["definitive_decision", "draft_decision"],
         )
-        stage_category = stage_category.reindex(columns=["definitive_decision", "draft_decision"], fill_value=0).astype(
-            int
-        )
-        return stage_category, len(farms_with_animals)
+        return empty, 0
 
-    linked_farms = subset["farm_id"].nunique()
-    stage_category = subset.groupby(["category", "stage_latest_llm"])["gem_aantal_dieren"].sum().unstack(fill_value=0)
+    raw = pd.read_csv(raw_animals_path)
+    raw = raw[raw["gem_jaar"] == year]
+    raw["rav_code"] = raw["rav_code"].astype(str).str.upper()
+    raw["gem_aantal_dieren"] = pd.to_numeric(raw["gem_aantal_dieren"], errors="coerce")
+    raw = raw[raw["gem_aantal_dieren"] > 0]
+    raw["category"] = raw["rav_code"].map(map_rav_category)
+    raw = raw[raw["category"] != ""]
+
+    rows = []
+    farms_with_animals = set()
+    for fid, rels in rel_map.items():
+        if not rels:
+            continue
+        subset_raw = raw[raw["rel_anoniem"].astype(str).isin(rels)]
+        if subset_raw.empty:
+            continue
+        farms_with_animals.add(fid)
+        sums = subset_raw.groupby("category")["gem_aantal_dieren"].sum()
+        for cat, val in sums.items():
+            rows.append({"category": cat, "stage_latest_llm": "definitive_decision", "gem_aantal_dieren": val})
+
+    if rows:
+        fallback_df = pd.DataFrame(rows)
+        stage_category = (
+            fallback_df.groupby(["category", "stage_latest_llm"])["gem_aantal_dieren"].sum().unstack(fill_value=0)
+        )
+    else:
+        stage_category = pd.DataFrame()
+
     stage_category = stage_category.reindex(
         ["kalkoenen", "kippen", "rundvee (excl. kalveren)", "vleeskalveren", "varkens", "geiten"],
         fill_value=0,
     )
     stage_category = stage_category.reindex(columns=["definitive_decision", "draft_decision"], fill_value=0).astype(int)
-    return stage_category, linked_farms
+    return stage_category, len(farms_with_animals)
 
 
 def build_farm_rel_map(df: pd.DataFrame) -> Dict[str, set]:
@@ -517,7 +501,10 @@ def plot_province_definitive_vs_rvo(df: pd.DataFrame, output_path: Path) -> None
         top_prov = df.loc[df["definitive"].idxmax(), "province"]
     else:
         top_prov = df.loc[df["rvo_participants"].idxmax(), "province"]
-    title = f"Chart 11: In {top_prov} zijn de meeste vergunningen al definitief ingetrokken."
+    title = (
+        f"Chart 11: In {top_prov} zijn de meeste vergunningen al definitief ingetrokken, "
+        "terwijl Limburg er nog weinig heeft."
+    )
     ax.set_title(wrap_title(title), fontsize=STYLE["title_fontsize"], pad=float(STYLE["title_pad"]))
     ax.grid(axis="x", linestyle="--", alpha=0.3)
     ax.legend(loc="lower right")

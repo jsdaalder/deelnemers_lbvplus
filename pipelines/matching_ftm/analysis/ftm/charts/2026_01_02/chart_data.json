@@ -1,0 +1,388 @@
+{
+  "meta": {
+    "generated_at": "2026-01-02T13:32:12",
+    "data_year": 2021,
+    "master_path": "/Users/jandaalder/Desktop/coding_projects/deelnemers_lbvplus/pipelines/matching_ftm/data/processed/master_participants.csv"
+  },
+  "chart1": {
+    "permit_total": 384,
+    "minfin_total": 112,
+    "overlap": 35,
+    "unique_total": 461
+  },
+  "chart2": {
+    "method_counts": {
+      "niet_gelinkt": 186,
+      "permit_adres": 149,
+      "minfin_kvk_adres": 83,
+      "fosfaat_adres": 33,
+      "gelinkt_zonder_dieren": 9,
+      "permit_kvk_adres": 1
+    },
+    "total_farms": 461,
+    "linked_total": 275,
+    "linked_without_animals": 9
+  },
+  "chart3": {
+    "counts": {
+      "kalkoenen": 74400,
+      "kippen": 3489388,
+      "rundvee (excl. kalveren)": 20366,
+      "vleeskalveren": 10497,
+      "varkens": 853122,
+      "geiten": 4673
+    },
+    "linked_farms": 266,
+    "linked_without_animals": 9
+  },
+  "chart4": {
+    "counts": {
+      "kalkoenen": 2,
+      "kippen": 32,
+      "rundvee (excl. kalveren)": 93,
+      "vleeskalveren": 7,
+      "varkens": 120,
+      "geiten": 0,
+      "Gemengde bedrijven": 12
+    },
+    "total_companies": 266
+  },
+  "chart5": {
+    "linked_avg": {
+      "kalkoenen": 279.7,
+      "kippen": 13118.0,
+      "rundvee (excl. kalveren)": 76.6,
+      "vleeskalveren": 39.5,
+      "varkens": 3207.2,
+      "geiten": 17.6
+    },
+    "ftm_avg": {
+      "kalkoenen": 25.5,
+      "kippen": 3427.8,
+      "rundvee (excl. kalveren)": 98.5,
+      "vleeskalveren": 33.9,
+      "varkens": 323.0,
+      "geiten": 20.1
+    },
+    "linked_farms": 266,
+    "ftm_farms": 27893
+  },
+  "chart6": {
+    "buyout": [
+      {
+        "category": "kalkoenen",
+        "totaal": 712148,
+        "buyout": 74400,
+        "buyout_pct": 10.447266579418885,
+        "remaining_pct": 89.55273342058112
+      },
+      {
+        "category": "kippen",
+        "totaal": 95612338,
+        "buyout": 3489388,
+        "buyout_pct": 3.6495164462979663,
+        "remaining_pct": 96.35048355370203
+      },
+      {
+        "category": "rundvee (excl. kalveren)",
+        "totaal": 2747330,
+        "buyout": 20366,
+        "buyout_pct": 0.7413015546002847,
+        "remaining_pct": 99.25869844539972
+      },
+      {
+        "category": "vleeskalveren",
+        "totaal": 945072,
+        "buyout": 10497,
+        "buyout_pct": 1.1107090253441008,
+        "remaining_pct": 98.88929097465589
+      },
+      {
+        "category": "varkens",
+        "totaal": 9009803,
+        "buyout": 853122,
+        "buyout_pct": 9.468819684514743,
+        "remaining_pct": 90.53118031548526
+      },
+      {
+        "category": "geiten",
+        "totaal": 561741,
+        "buyout": 4673,
+        "buyout_pct": 0.831878036319229,
+        "remaining_pct": 99.16812196368078
+      }
+    ],
+    "buyout_farms": 266
+  },
+  "chart7": {
+    "stages": [
+      {
+        "stage": "receipt_of_application",
+        "total": 94,
+        "linked": 93,
+        "unlinked": 1
+      },
+      {
+        "stage": "draft_decision",
+        "total": 48,
+        "linked": 45,
+        "unlinked": 3
+      },
+      {
+        "stage": "definitive_decision",
+        "total": 47,
+        "linked": 45,
+        "unlinked": 2
+      }
+    ]
+  },
+  "chart8": {
+    "stage_animals": [
+      {
+        "category": "kalkoenen",
+        "definitive_decision": 0,
+        "draft_decision": 0
+      },
+      {
+        "category": "kippen",
+        "definitive_decision": 271317,
+        "draft_decision": 0
+      },
+      {
+        "category": "rundvee (excl. kalveren)",
+        "definitive_decision": 4732,
+        "draft_decision": 0
+      },
+      {
+        "category": "vleeskalveren",
+        "definitive_decision": 1228,
+        "draft_decision": 0
+      },
+      {
+        "category": "varkens",
+        "definitive_decision": 80373,
+        "draft_decision": 0
+      },
+      {
+        "category": "geiten",
+        "definitive_decision": 0,
+        "draft_decision": 0
+      }
+    ],
+    "stage_farms": 45
+  },
+  "chart9": {
+    "participants_def": 47,
+    "participants_total": 189,
+    "animals_def": 357650,
+    "animals_total": 4452446,
+    "pct_participants": 24.867724867724867,
+    "pct_animals": 8.032663394457789
+  },
+  "rvo_comparison": [
+    {
+      "province": "Gelderland",
+      "rvo_participants": 325,
+      "definitive": 40,
+      "known": 93,
+      "remaining_def": 285,
+      "remaining_known": 232,
+      "pct_def": 12.307692307692308,
+      "pct_known": 28.615384615384613
+    },
+    {
+      "province": "Noord-Brabant",
+      "rvo_participants": 237,
+      "definitive": 32,
+      "known": 78,
+      "remaining_def": 205,
+      "remaining_known": 159,
+      "pct_def": 13.502109704641349,
+      "pct_known": 32.91139240506329
+    },
+    {
+      "province": "Limburg",
+      "rvo_participants": 169,
+      "definitive": 9,
+      "known": 132,
+      "remaining_def": 160,
+      "remaining_known": 37,
+      "pct_def": 5.325443786982249,
+      "pct_known": 78.10650887573965
+    },
+    {
+      "province": "Overijssel",
+      "rvo_participants": 152,
+      "definitive": 8,
+      "known": 39,
+      "remaining_def": 144,
+      "remaining_known": 113,
+      "pct_def": 5.263157894736842,
+      "pct_known": 25.657894736842106
+    },
+    {
+      "province": "Drenthe",
+      "rvo_participants": 44,
+      "definitive": 2,
+      "known": 23,
+      "remaining_def": 42,
+      "remaining_known": 21,
+      "pct_def": 4.545454545454546,
+      "pct_known": 52.27272727272727
+    },
+    {
+      "province": "Friesland",
+      "rvo_participants": 33,
+      "definitive": 0,
+      "known": 0,
+      "remaining_def": 33,
+      "remaining_known": 33,
+      "pct_def": 0.0,
+      "pct_known": 0.0
+    },
+    {
+      "province": "Utrecht",
+      "rvo_participants": 20,
+      "definitive": 2,
+      "known": 3,
+      "remaining_def": 18,
+      "remaining_known": 17,
+      "pct_def": 10.0,
+      "pct_known": 15.0
+    },
+    {
+      "province": "Flevoland",
+      "rvo_participants": 14,
+      "definitive": 1,
+      "known": 3,
+      "remaining_def": 13,
+      "remaining_known": 11,
+      "pct_def": 7.142857142857142,
+      "pct_known": 21.428571428571427
+    },
+    {
+      "province": "Zeeland",
+      "rvo_participants": 10,
+      "definitive": 0,
+      "known": 0,
+      "remaining_def": 10,
+      "remaining_known": 10,
+      "pct_def": 0.0,
+      "pct_known": 0.0
+    },
+    {
+      "province": "Noord-Holland",
+      "rvo_participants": 8,
+      "definitive": 0,
+      "known": 2,
+      "remaining_def": 8,
+      "remaining_known": 6,
+      "pct_def": 0.0,
+      "pct_known": 25.0
+    },
+    {
+      "province": "Groningen",
+      "rvo_participants": 6,
+      "definitive": 0,
+      "known": 1,
+      "remaining_def": 6,
+      "remaining_known": 5,
+      "pct_def": 0.0,
+      "pct_known": 16.666666666666664
+    },
+    {
+      "province": "Zuid-Holland",
+      "rvo_participants": 5,
+      "definitive": 0,
+      "known": 0,
+      "remaining_def": 5,
+      "remaining_known": 5,
+      "pct_def": 0.0,
+      "pct_known": 0.0
+    }
+  ],
+  "regions": {
+    "Gelderland": {
+      "subdir": "gelderland",
+      "label": "Gelderland",
+      "buyout": [
+        {
+          "category": "kalkoenen",
+          "totaal": 712148,
+          "buyout": 0,
+          "buyout_pct": 0.0,
+          "remaining_pct": 100.0
+        },
+        {
+          "category": "kippen",
+          "totaal": 95612338,
+          "buyout": 162783,
+          "buyout_pct": 0.1702531319754988,
+          "remaining_pct": 99.8297468680245
+        },
+        {
+          "category": "rundvee (excl. kalveren)",
+          "totaal": 2747330,
+          "buyout": 3421,
+          "buyout_pct": 0.12452089847233495,
+          "remaining_pct": 99.87547910152766
+        },
+        {
+          "category": "vleeskalveren",
+          "totaal": 945072,
+          "buyout": 7275,
+          "buyout_pct": 0.769782619736909,
+          "remaining_pct": 99.23021738026308
+        },
+        {
+          "category": "varkens",
+          "totaal": 9009803,
+          "buyout": 63225,
+          "buyout_pct": 0.701735653931612,
+          "remaining_pct": 99.2982643460684
+        },
+        {
+          "category": "geiten",
+          "totaal": 561741,
+          "buyout": 4673,
+          "buyout_pct": 0.831878036319229,
+          "remaining_pct": 99.16812196368078
+        }
+      ],
+      "buyout_farms": 37,
+      "stage_animals": [
+        {
+          "category": "kalkoenen",
+          "definitive_decision": 0,
+          "draft_decision": 0
+        },
+        {
+          "category": "kippen",
+          "definitive_decision": 5740,
+          "draft_decision": 0
+        },
+        {
+          "category": "rundvee (excl. kalveren)",
+          "definitive_decision": 1273,
+          "draft_decision": 0
+        },
+        {
+          "category": "vleeskalveren",
+          "definitive_decision": 0,
+          "draft_decision": 0
+        },
+        {
+          "category": "varkens",
+          "definitive_decision": 0,
+          "draft_decision": 0
+        },
+        {
+          "category": "geiten",
+          "definitive_decision": 0,
+          "draft_decision": 0
+        }
+      ],
+      "stage_farms": 10
+    }
+  }
+}
