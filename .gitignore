@@ -2,6 +2,7 @@
 .env
 __pycache__/
 experiments/llm_improvement_testing/*.csv
+.cache/
 
 # Global data/media (only keep charts in final_results)
 *.csv

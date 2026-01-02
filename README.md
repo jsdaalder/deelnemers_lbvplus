@@ -21,9 +21,9 @@ A public, end-to-end view of the LBV/LBV+ shutdown scheme. The repo scrapes perm
 ## Data sources (public)
 - Permit notices: scraped from https://www.officielebekendmakingen.nl/
 - MinFin voorschot dataset: https://data.overheid.nl/dataset/financile-instrumenten-2022#panel-resources
-- RVO actueel overzicht (XLSX): https://www.rvo.nl/onderwerpen/lbv-plus-actueel
+- RVO actueel overzicht: https://www.rvo.nl/onderwerpen/lbv-plus-actueel
 - Fosfaatbeschikkingen: https://www.rijksoverheid.nl/documenten/publicaties/2023/09/19/tabel-gegevens-fosfaatbeschikkingen-bij-bob-woo-besluit-over-toekenning-fosfaatrechten-aan-agrarische-bedrijven
-- FTM dieraantallen (WO-overzicht gecombineerde opgaven): https://www.rijksoverheid.nl/documenten/woo-besluiten/2023/05/04/besluit-op-woo-verzoek-over-de-gecombineerde-opgaven-van-alle-agrarische-ondernemingen-in-nederland
+- FTM dieraantallen (Woo gecombineerde opgaven): https://www.rijksoverheid.nl/documenten/woo-besluiten/2023/05/04/besluit-op-woo-verzoek-over-de-gecombineerde-opgaven-van-alle-agrarische-ondernemingen-in-nederland
 - Woonplaatsen (CBS): https://www.cbs.nl/nl-nl/cijfers/detail/86097NED
 - RAV conversietabel diercategorieën: https://iplo.nl/regelgeving/regels-voor-activiteiten/dierenverblijven/systeembeschrijvingen-stallen/conversietabel-bijlage-rav-code/
 
