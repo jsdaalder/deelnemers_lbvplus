@@ -1382,7 +1382,9 @@ def plot_chart_receipt_elapsed(days: pd.Series, stats: dict, output_path: Path) 
     bins = list(range(0, max(days.max(), 1) + 61, 60))
     if bins[-1] < days.max():
         bins.append(days.max() + 1)
-    ax.hist(days, bins=bins, color=str(STYLE["color_permit"]), edgecolor="#ffffff", alpha=0.8)
+    counts, edges, bars = ax.hist(
+        days, bins=bins, color=str(STYLE["color_permit"]), edgecolor="#ffffff", alpha=0.8
+    )
 
     avg_days = stats.get("avg_days", 0.0)
     min_days = stats.get("min_days", 0)
@@ -1406,6 +1408,9 @@ def plot_chart_receipt_elapsed(days: pd.Series, stats: dict, output_path: Path) 
     )
     ax.set_title(wrap_title(title), fontsize=STYLE["title_fontsize"], pad=float(STYLE["title_pad"]))
     ax.grid(axis="y", linestyle="--", alpha=0.3)
+    # Label each bar with its count.
+    positions = {}
+    annotate_bar_tops(ax, bars, counts, use_log=False, last_positions=positions, labels=[str(int(c)) for c in counts])
     ax.legend(fontsize=STYLE["legend_fontsize"])
 
     fig.tight_layout()
