@@ -20,6 +20,7 @@ import requests
 BASE_URL = "https://zoek.officielebekendmakingen.nl/"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "data"
+RUNS_DIR = DATA_DIR / "runs"
 DEFAULT_OUTPUT = DATA_DIR / "01_overheid_results.csv"
 DEFAULT_API_ENDPOINT = "https://repository.overheid.nl/sru"
 DEFAULT_API_QUERY = 'c.product-area==officielepublicaties AND cql.textAndIndexes="lbv"'
@@ -435,6 +436,35 @@ def collect_rows(args: argparse.Namespace) -> List[Dict[str, str]]:
     )
 
 
+def log_run(args: argparse.Namespace, out_path: Path, total_rows: int, new_rows: int) -> None:
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = RUNS_DIR / "01_parse_overheid_pages_runs.log"
+    now = datetime.now().isoformat(timespec="seconds")
+    mode = args.mode or ""
+    parts = [
+        f"time={now}",
+        f"mode={mode}",
+        f"out={out_path}",
+        f"total_rows={total_rows}",
+        f"new_rows={new_rows}",
+    ]
+    if mode == "api":
+        parts.extend(
+            [
+                f"endpoint={args.api_endpoint}",
+                f"query={args.api_query}",
+                f"start={args.api_start_record}",
+                f"max={args.api_max_records}",
+                f"chunk={args.api_chunk_size}",
+            ]
+        )
+    else:
+        files = ",".join(args.files or [])
+        parts.append(f"files={files}")
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(" | ".join(parts) + "\n")
+
+
 def main():
     args = parse_args()
     if not args.mode:
@@ -506,6 +536,7 @@ def main():
             w.writerow(r)
 
     print(f"Wrote {len(deduped)} rows → {out_path} (nieuwe records: {len(new_rows)})")
+    log_run(args, out_path, len(deduped), len(new_rows))
 
 if __name__ == "__main__":
     main()

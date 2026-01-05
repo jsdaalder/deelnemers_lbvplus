@@ -341,7 +341,8 @@ def compute_stage_animal_counts(
         fill_value=0,
     )
     stage_category = stage_category.reindex(columns=["definitive_decision", "draft_decision"], fill_value=0).astype(int)
-    return stage_category, len(farms_with_animals)
+    # Count farms with known rels, even if animal totals are zero for the year.
+    return stage_category, len(rel_map)
 
 
 def build_farm_rel_map(df: pd.DataFrame) -> Dict[str, set]:
@@ -691,7 +692,7 @@ def compute_avg_animals_per_farm(
 
 def compute_permit_stage_links(df: pd.DataFrame) -> pd.DataFrame:
     """Return per-stage totals of unique permit farms and how many have a rel link."""
-    permit_df = df[(df["source"] == "permit") & df.get("has_animals", True)].copy()
+    permit_df = df[df["source"] == "permit"].copy()
     permit_df = filter_to_year(permit_df, DATA_YEAR)
     stages = ["receipt_of_application", "draft_decision", "definitive_decision"]
     rows = []
@@ -1188,7 +1189,11 @@ def plot_chart4_permit_stages(stage_df: pd.DataFrame, output_path: Path) -> None
 
 
 def plot_chart4_stage_animals(
-    stage_counts: pd.DataFrame, stage_farms: int, output_path: Path, region_label: str | None = None
+    stage_counts: pd.DataFrame,
+    stage_farms: int,
+    total_definitive_farms: int,
+    output_path: Path,
+    region_label: str | None = None,
 ) -> None:
     """Stacked bar with definitive animals per category."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1212,11 +1217,15 @@ def plot_chart4_stage_animals(
 
     ax.set_ylabel("Aantal dieren")
     sentence = (
-        f"Chart 8{region_suffix}: De "
+        f"Chart 8{region_suffix}: Van de "
+        + f"{total_definitive_farms:,}".replace(",", ".")
+        + f" bedrijven die gestopt zijn{region_clause}, weten we van "
         + f"{stage_farms:,}".replace(",", ".")
-        + f" bedrijven van wie de vergunning definitief is ingetrokken{region_clause}, hielden "
+        + " het aantal dieren. Die "
+        + f"{stage_farms:,}".replace(",", ".")
+        + " bedrijven houden samen "
         + f"{total_animals:,}".replace(",", ".")
-        + " dieren. Deze stallen staan nu dus leeg."
+        + " dieren."
     )
     ax.set_title(wrap_title(sentence), fontsize=13, pad=float(STYLE["title_pad"]))
     ax.tick_params(axis="x", rotation=25)
@@ -1416,6 +1425,7 @@ def generate_charts(
     linked_avg, avg_farms, ftm_avg, ftm_farms = compute_avg_animals_per_farm(df_match, FTM_RAW_ANIMALS, DATA_YEAR)
     stage_link_df = compute_permit_stage_links(df_year)
     stage_counts, stage_farms = compute_stage_animal_counts(df_match, FTM_RAW_ANIMALS, DATA_YEAR)
+    total_definitive_farms = df_match[df_match["stage_latest_llm"] == "definitive_decision"]["farm_id"].nunique()
     buyout_df = compute_buyout_share(df_match, FTM_RAW_ANIMALS, DATA_YEAR)
 
     animals_def = int(stage_counts["definitive_decision"].sum())
@@ -1443,6 +1453,7 @@ def generate_charts(
             continue
         buyout_reg = compute_buyout_share(df_reg, FTM_RAW_ANIMALS, DATA_YEAR)
         stage_counts_p, stage_farms_p = compute_stage_animal_counts(df_reg, FTM_RAW_ANIMALS, DATA_YEAR)
+        total_definitive_reg = df_reg[df_reg["stage_latest_llm"] == "definitive_decision"]["farm_id"].nunique()
         region_data[name] = {
             "subdir": subdir,
             "label": label,
@@ -1450,6 +1461,7 @@ def generate_charts(
             "buyout_farms": int(buyout_reg.attrs.get("buyout_farms", 0)),
             "stage_animals": stage_counts_p.reset_index().rename(columns={"index": "category"}).to_dict(orient="records"),
             "stage_farms": int(stage_farms_p),
+            "total_definitive_farms": int(total_definitive_reg),
         }
 
     # Pack metrics into one shareable file
@@ -1491,6 +1503,7 @@ def generate_charts(
         "chart8": {
             "stage_animals": stage_counts.reset_index().rename(columns={"index": "category"}).to_dict(orient="records"),
             "stage_farms": int(stage_farms),
+            "total_definitive_farms": int(total_definitive_farms),
         },
         "chart9": {
             "participants_def": int(participants_def),
@@ -1588,7 +1601,8 @@ def generate_charts(
     stage_counts = pd.DataFrame(c8["stage_animals"]).set_index("category")
     stage_farms = int(c8["stage_farms"])
     chart8_path = charts_dir / CHART_FILES["animals_by_stage"]
-    plot_chart4_stage_animals(stage_counts, stage_farms, chart8_path)
+    total_definitive_farms = int(c8.get("total_definitive_farms", 0))
+    plot_chart4_stage_animals(stage_counts, stage_farms, total_definitive_farms, chart8_path)
     print(
         f"Saved stage stacked bar to {chart8_path} (farms with stage+animals: {stage_farms}, "
         f"categories: {stage_counts.index.tolist()})."
@@ -1644,9 +1658,16 @@ def generate_charts(
 
         stage_counts_p = pd.DataFrame(reg_data["stage_animals"]).set_index("category")
         stage_farms_p = int(reg_data["stage_farms"])
+        total_definitive_reg = int(reg_data.get("total_definitive_farms", 0))
         stage_filename = CHART_FILES["animals_by_stage"] if subdir is None else f"8_chart_animals_by_stage_{slugify_label(label)}.png"
         stage_path = charts_out / stage_filename
-        plot_chart4_stage_animals(stage_counts_p, stage_farms_p, stage_path, region_label=label if subdir else None)
+        plot_chart4_stage_animals(
+            stage_counts_p,
+            stage_farms_p,
+            total_definitive_reg,
+            stage_path,
+            region_label=label if subdir else None,
+        )
         print(
             f"[region] Saved stage animals chart for {name} to {stage_path} "
             f"(farms with animals: {stage_farms_p})."
