@@ -42,6 +42,7 @@ CHART_FILES = {
     "definitive_progress": "9_chart_definitive_progress.png",
     "province_known_vs_rvo": "10_chart_known_vs_rvo.png",
     "province_definitive_vs_rvo": "11_chart_definitive_vs_rvo.png",
+    "receipt_elapsed": "12_chart_receipt_elapsed.png",
     "overview": "chart_all.png",
 }
 ALL_CHART_FILENAMES = set(CHART_FILES.values())
@@ -151,6 +152,18 @@ def filter_to_year(df: pd.DataFrame, year: int) -> pd.DataFrame:
     return df[mask]
 
 
+def parse_day_month_year(value: str) -> datetime.date | None:
+    if not value or not isinstance(value, str):
+        return None
+    value = value.strip()
+    for fmt in ("%d-%m-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 def annotate_bar_tops(
     ax: plt.Axes,
     bars,
@@ -222,6 +235,24 @@ def compute_source_counts_match(df: pd.DataFrame) -> Tuple[int, int, int, int]:
     overlap = (sources.groupby("farm_id")["source"].nunique() > 1).sum()
     unique_total = sources["farm_id"].nunique()
     return permit_total, minfin_total, overlap, unique_total
+
+
+def compute_receipt_elapsed_days(df: pd.DataFrame, ref_date: datetime.date) -> Tuple[pd.Series, dict]:
+    """Return days since receipt for permit farms with receipt stage, plus summary stats."""
+    receipt = df[(df["source"] == "permit") & (df["stage_latest_llm"] == "receipt_of_application")].copy()
+    receipt = receipt.drop_duplicates(subset=["farm_id"])
+    receipt["parsed_date"] = receipt["Datum_latest"].apply(parse_day_month_year)
+    receipt = receipt[receipt["parsed_date"].notna()].copy()
+    receipt["days_elapsed"] = receipt["parsed_date"].apply(lambda d: (ref_date - d).days)
+    days = receipt["days_elapsed"].astype(int)
+    stats = {
+        "farms_total": int(len(receipt)),
+        "avg_days": float(days.mean()) if not days.empty else 0.0,
+        "min_days": int(days.min()) if not days.empty else 0,
+        "max_days": int(days.max()) if not days.empty else 0,
+        "ref_date": ref_date.isoformat(),
+    }
+    return days, stats
 
 
 def compute_link_methods(df: pd.DataFrame, total_farms: int) -> Tuple[pd.Series, int]:
@@ -1340,6 +1371,49 @@ def plot_chart8_definitive_progress(
     plt.close(fig)
 
 
+def plot_chart_receipt_elapsed(days: pd.Series, stats: dict, output_path: Path) -> None:
+    """Histogram of days since receipt of application for receipt-only permit farms."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if days.empty:
+        print("[warn] No receipt-only farms with valid dates; skipping receipt chart.")
+        return
+
+    fig, ax = plt.subplots(figsize=STYLE["figsize"])
+    bins = list(range(0, max(days.max(), 1) + 61, 60))
+    if bins[-1] < days.max():
+        bins.append(days.max() + 1)
+    ax.hist(days, bins=bins, color=str(STYLE["color_permit"]), edgecolor="#ffffff", alpha=0.8)
+
+    avg_days = stats.get("avg_days", 0.0)
+    min_days = stats.get("min_days", 0)
+    max_days = stats.get("max_days", 0)
+    farms_total = stats.get("farms_total", 0)
+    ref_date = stats.get("ref_date", "")
+
+    ax.axvline(avg_days, color=str(STYLE["color_definitive"]), linestyle="--", linewidth=2, label="Gemiddelde")
+    ax.set_xlabel("Aantal dagen sinds ontvangst")
+    ax.set_ylabel("Aantal bedrijven")
+    title = (
+        "Chart 12: Voor "
+        + f"{farms_total:,}".replace(",", ".")
+        + " bedrijven met alleen een ontvangstmelding is gemiddeld "
+        + f"{avg_days:.1f}"
+        + " dagen verstreken (min "
+        + f"{min_days}"
+        + ", max "
+        + f"{max_days}"
+        + ")."
+    )
+    ax.set_title(wrap_title(title), fontsize=STYLE["title_fontsize"], pad=float(STYLE["title_pad"]))
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    ax.legend(fontsize=STYLE["legend_fontsize"])
+
+    fig.tight_layout()
+    add_subtitle(fig, SUBTITLE_TEXT + f"\nPeildatum: {ref_date}.")
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
 def combine_charts(charts_dir: Path, output_name: str = "chart_all.png") -> Path:
     """Combine all chart PNGs vertically into one overview image."""
     order_keys = [
@@ -1352,6 +1426,7 @@ def combine_charts(charts_dir: Path, output_name: str = "chart_all.png") -> Path
         "permit_stages",
         "animals_by_stage",
         "definitive_progress",
+        "receipt_elapsed",
     ]
     images = []
     for key in order_keys:
@@ -1416,7 +1491,7 @@ def generate_charts(
     df_raw["has_animals"] = df_raw["farm_id"].isin(farms_with_animals)
 
     # --- Compute all metrics first
-    permit_total, minfin_total, overlap, unique_total = compute_source_counts_match(df_match)
+    permit_total, minfin_total, overlap, unique_total = compute_source_counts_match(df_raw)
     method_counts, total_farms = compute_link_methods(df_match, unique_total)
     linked_total = total_farms - method_counts.get("niet_gelinkt", 0)
     linked_without_animals = max(linked_total - ftm_linked, 0)
@@ -1426,6 +1501,7 @@ def generate_charts(
     stage_link_df = compute_permit_stage_links(df_year)
     stage_counts, stage_farms = compute_stage_animal_counts(df_match, FTM_RAW_ANIMALS, DATA_YEAR)
     total_definitive_farms = df_match[df_match["stage_latest_llm"] == "definitive_decision"]["farm_id"].nunique()
+    receipt_days, receipt_stats = compute_receipt_elapsed_days(df_year, datetime.date.today())
     buyout_df = compute_buyout_share(df_match, FTM_RAW_ANIMALS, DATA_YEAR)
 
     animals_def = int(stage_counts["definitive_decision"].sum())
@@ -1512,6 +1588,10 @@ def generate_charts(
             "animals_total": int(animals_total),
             "pct_participants": float(pct_participants),
             "pct_animals": float(pct_animals),
+        },
+        "chart12": {
+            "receipt_days": receipt_days.tolist(),
+            "receipt_stats": receipt_stats,
         },
         "rvo_comparison": rvo_comp.to_dict(orient="records"),
         "regions": region_data,
@@ -1634,6 +1714,14 @@ def generate_charts(
     plot_province_known_vs_rvo(rvo_comp_loaded, rvo_known_chart)
     if not rvo_comp_loaded.empty:
         print(f"Saved province known vs RVO chart to {rvo_known_chart}.")
+
+    c12 = chart_data.get("chart12", {})
+    receipt_days = pd.Series(c12.get("receipt_days", []))
+    receipt_stats = c12.get("receipt_stats", {})
+    receipt_path = charts_dir / CHART_FILES["receipt_elapsed"]
+    plot_chart_receipt_elapsed(receipt_days, receipt_stats, receipt_path)
+    if not receipt_days.empty:
+        print(f"Saved receipt elapsed chart to {receipt_path}.")
 
     overview_path = combine_charts(charts_dir, CHART_FILES["overview"])
     print(f"Combined overview saved to {overview_path}.")
