@@ -40,18 +40,136 @@ def _clean_postcode(text: str) -> str:
     value = re.sub(r"\s+", "", value).upper()
     return re.sub(r"[^\w]", "", value)
 
+PROVINCE_SUFFIXES = {
+    "gld",
+    "ov",
+    "lb",
+    "nb",
+    "ut",
+    "dr",
+    "fr",
+    "zh",
+    "nh",
+    "fl",
+    "ze",
+    "gr",
+}
+
+PLACE_STOPWORDS = {"aan", "de", "den", "der", "het", "in", "op", "te", "ten", "ter", "van"}
+PLACE_TAIL_TOKENS = {
+    "broek",
+    "veen",
+    "veld",
+    "waard",
+    "wijk",
+    "dam",
+    "berg",
+    "bosch",
+    "bos",
+    "hout",
+    "kamp",
+    "land",
+    "meer",
+    "horst",
+    "ratum",
+}
+
+STREET_SUFFIX_MAP = {
+    "straat": "str",
+    "str": "straat",
+    "weg": "wg",
+    "wg": "weg",
+    "dijk": "dk",
+    "dk": "dijk",
+    "laan": "ln",
+    "ln": "laan",
+    "steeg": "stg",
+    "stg": "steeg",
+}
+
+
+def _place_variants(place: str) -> List[str]:
+    cleaned = _clean_text(place)
+    if not cleaned:
+        return [""]
+    parts = cleaned.split()
+    # strip province suffixes like "gld", "ov", "lb"
+    if parts and parts[-1] in PROVINCE_SUFFIXES:
+        parts = parts[:-1]
+    variants = [" ".join(parts).strip()]
+    if len(parts) > 1:
+        variants.append(parts[0])
+        no_stop = [p for p in parts if p not in PLACE_STOPWORDS]
+        if no_stop and no_stop != parts:
+            variants.append(" ".join(no_stop))
+        if parts[-1] in PLACE_TAIL_TOKENS:
+            variants.append(" ".join(parts[:-1]))
+    expanded: List[str] = []
+    for variant in variants:
+        if not variant:
+            continue
+        expanded.append(variant)
+        if len(variant) > 12:
+            expanded.append(variant[:12])
+    return list(dict.fromkeys(expanded))
+
+
+def _street_variants(street: str, max_len: int = 20) -> List[str]:
+    cleaned = _clean_text(street)
+    if not cleaned:
+        return [""]
+    variants = [cleaned]
+    tokens = cleaned.split()
+    if tokens:
+        last = tokens[-1]
+        repl = STREET_SUFFIX_MAP.get(last)
+        if repl:
+            variants.append(" ".join(tokens[:-1] + [repl]))
+    if len(cleaned) > max_len:
+        variants.append(cleaned[:max_len])
+    if len(cleaned) > 18:
+        variants.append(cleaned[:18])
+    return list(dict.fromkeys(variants))
+
+def _normalize_number_addition(number: str, addition: str) -> Tuple[str, str]:
+    num = _clean_code(number)
+    add = _clean_code(addition)
+    if add:
+        match = re.match(r"^(\d+)", num)
+        return (match.group(1) if match else num, add)
+    match = re.match(r"^(\d+)([a-z]+)$", num)
+    if match:
+        return match.group(1), match.group(2)
+    return num, ""
+
 
 def make_key(street: str, number: str, addition: str, postcode: str, city: str) -> str:
     """Normalize address parts to a consistent key."""
+    num, add = _normalize_number_addition(number, addition)
     return "|".join(
         [
             _clean_text(street),
-            _clean_code(number),
-            _clean_code(addition),
+            _clean_code(num),
+            _clean_code(add),
             _clean_postcode(postcode),  # postcode without spaces to avoid format drift
             _clean_text(city),
         ]
     )
+
+
+def build_keys(street: str, number: str, addition: str, postcode: str, city: str) -> Set[str]:
+    """Generate primary and fallback keys (truncated street/place variants)."""
+    keys: Set[str] = set()
+    pc = _clean_postcode(postcode)
+    num, add = _normalize_number_addition(number, addition)
+    num = _clean_code(num)
+    add = _clean_code(add)
+    for s in _street_variants(street):
+        for c in _place_variants(city):
+            key = "|".join([s, num, add, pc, c])
+            if key.strip("|"):
+                keys.add(key)
+    return keys
 
 
 def load_animals_with_addresses(path: Path) -> Dict[str, List[dict]]:
@@ -60,14 +178,14 @@ def load_animals_with_addresses(path: Path) -> Dict[str, List[dict]]:
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
-            key = make_key(
+            for key in build_keys(
                 row.get("B_STRAATNAAM", ""),
                 row.get("B_HUIS_NR", ""),
                 row.get("B_HUIS_NR_TOEV", ""),
                 row.get("B_POSTCODE", ""),
                 row.get("B_PLAATS", ""),
-            )
-            index[key].append(row)
+            ):
+                index[key].append(row)
     return index
 
 
@@ -80,7 +198,8 @@ def parse_address_key_all(address_key_all: str) -> Set[str]:
         parts = raw.split("|")
         while len(parts) < 5:
             parts.append("")
-        keys.add(make_key(*parts[:5]))
+        for key in build_keys(*parts[:5]):
+            keys.add(key)
     return keys
 
 

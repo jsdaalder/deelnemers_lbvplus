@@ -184,6 +184,31 @@ def normalize_name(val: str) -> str:
     return " ".join(words).strip()
 
 
+PROVINCE_SUFFIXES = {
+    "gld",
+    "ov",
+    "lb",
+    "nb",
+    "ut",
+    "dr",
+    "fr",
+    "zh",
+    "nh",
+    "fl",
+    "ze",
+    "gr",
+}
+
+
+def strip_province_suffix(place: str) -> str:
+    if not place:
+        return ""
+    parts = place.split()
+    if parts and parts[-1] in PROVINCE_SUFFIXES:
+        parts = parts[:-1]
+    return " ".join(parts).strip()
+
+
 def normalize_address(straat: str, huisnr: str, postcode: str, plaats: str) -> str:
     def fold(x: str) -> str:
         if not x:
@@ -210,8 +235,33 @@ def normalize_address(straat: str, huisnr: str, postcode: str, plaats: str) -> s
     s = clean_text(straat)
     h = clean_code(huisnr)
     pc = clean_postcode(postcode)
-    pl = clean_text(plaats)
+    pl = strip_province_suffix(clean_text(plaats))
     return "|".join([s, h, "", pc, pl])
+
+
+def normalize_street_prefix(straat: str, max_len: int = 20) -> str:
+    """Return a prefix for long streetnames to match truncated FTM strings."""
+    if not straat:
+        return ""
+    return straat[:max_len]
+
+
+def addresses_match(a: str, b: str) -> bool:
+    """Compare normalized address keys with a fallback for truncated street names."""
+    if a == b:
+        return True
+    a_parts = a.split("|")
+    b_parts = b.split("|")
+    if len(a_parts) < 5 or len(b_parts) < 5:
+        return False
+    # Require house+postcode+place match, and allow street prefix match.
+    if a_parts[1:] != b_parts[1:]:
+        return False
+    a_street = a_parts[0]
+    b_street = b_parts[0]
+    if not a_street or not b_street:
+        return False
+    return a_street.startswith(b_street) or b_street.startswith(a_street)
 
 
 def load_clusters(path: Path) -> Dict[str, dict]:

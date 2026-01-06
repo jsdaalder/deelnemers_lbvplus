@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import time
 from pathlib import Path
 from typing import Dict, Iterable, List
 
@@ -51,6 +52,8 @@ PDOK_ENDPOINTS = [
     "https://geodata.nationaalgeoregister.nl/locatieserver/v3/free",
 ]
 PDOK_TIMEOUT = 10  # seconds
+PDOK_RETRIES = 3
+PDOK_RETRY_SLEEP = 0.5  # seconds
 
 
 def parse_args() -> argparse.Namespace:
@@ -62,6 +65,16 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Optioneel maximum aantal rijen (handig voor snelle tests).",
+    )
+    parser.add_argument(
+        "--pdok-failures",
+        default=str(DATA_DIR / "05_pdok_failures.csv"),
+        help="CSV output for PDOK lookup failures (default: data/05_pdok_failures.csv).",
+    )
+    parser.add_argument(
+        "--pdok-corrections",
+        default=str(DATA_DIR / "05_pdok_corrections.csv"),
+        help="CSV output for PDOK postcode corrections (default: data/05_pdok_corrections.csv).",
     )
     return parser.parse_args()
 
@@ -171,17 +184,25 @@ class PdokClient:
         headers = {"Accept": "application/json"}
         postcode = ""
         for endpoint in self.endpoints:
-            try:
-                resp = requests.get(endpoint, params=params, timeout=PDOK_TIMEOUT, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
-                docs = data.get("response", {}).get("docs", [])
-                postcode = docs[0].get("postcode", "") if docs else ""
-                if postcode:
-                    break
-            except requests.RequestException as exc:  # pragma: no cover - network failures
-                print(f"[warn] PDOK lookup failed via {endpoint} for '{query}': {exc}")
-                continue
+            for attempt in range(1, PDOK_RETRIES + 1):
+                try:
+                    resp = requests.get(endpoint, params=params, timeout=PDOK_TIMEOUT, headers=headers)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    docs = data.get("response", {}).get("docs", [])
+                    postcode = docs[0].get("postcode", "") if docs else ""
+                    if postcode:
+                        break
+                except requests.RequestException as exc:  # pragma: no cover - network failures
+                    print(
+                        f"[warn] PDOK lookup failed via {endpoint} for '{query}' "
+                        f"(attempt {attempt}/{PDOK_RETRIES}): {exc}"
+                    )
+                    if attempt < PDOK_RETRIES:
+                        time.sleep(PDOK_RETRY_SLEEP)
+                    continue
+            if postcode:
+                break
         normalized = normalize_postcode(postcode)
         self.cache[key] = normalized
         return normalized
@@ -194,7 +215,7 @@ class PdokClient:
         )
 
 
-def fill_missing_postcodes(df: pd.DataFrame, client: PdokClient) -> pd.DataFrame:
+def fill_missing_postcodes(df: pd.DataFrame, client: PdokClient, failures: List[dict]) -> pd.DataFrame:
     for idx, row in df.iterrows():
         existing = normalize_postcode(str(row.get(COL_POSTCODE, "")))
         if existing:
@@ -206,9 +227,59 @@ def fill_missing_postcodes(df: pd.DataFrame, client: PdokClient) -> pd.DataFrame
         suffix = str(row.get(COL_SUFFIX, "")).strip()
         place = str(row.get(COL_PLACE, "")).strip()
         if not (street and number and place):
+            failures.append(
+                {
+                    "doc_id": row.get("doc_id", ""),
+                    "street": street,
+                    "number": number,
+                    "suffix": suffix,
+                    "place": place,
+                    "reason": "missing_components",
+                }
+            )
             continue
         looked_up = client.lookup_postcode(street, number, suffix, place)
         if looked_up:
+            df.at[idx, COL_POSTCODE] = looked_up
+        else:
+            failures.append(
+                {
+                    "doc_id": row.get("doc_id", ""),
+                    "street": street,
+                    "number": number,
+                    "suffix": suffix,
+                    "place": place,
+                    "reason": "no_match",
+                }
+            )
+    return df
+
+
+def fill_canonical_postcodes(df: pd.DataFrame, client: PdokClient, corrections: List[dict]) -> pd.DataFrame:
+    for idx, row in df.iterrows():
+        existing_raw = str(row.get(COL_POSTCODE, ""))
+        existing = normalize_postcode(existing_raw)
+        if not existing:
+            continue
+        street = str(row.get(COL_STREET, "")).strip()
+        number = str(row.get(COL_NUMBER, "")).strip()
+        suffix = str(row.get(COL_SUFFIX, "")).strip()
+        place = str(row.get(COL_PLACE, "")).strip()
+        if not (street and number and place):
+            continue
+        looked_up = client.lookup_postcode(street, number, suffix, place)
+        if looked_up and looked_up != existing:
+            corrections.append(
+                {
+                    "doc_id": row.get("doc_id", ""),
+                    "street": street,
+                    "number": number,
+                    "suffix": suffix,
+                    "place": place,
+                    "postcode_old": existing_raw,
+                    "postcode_new": looked_up,
+                }
+            )
             df.at[idx, COL_POSTCODE] = looked_up
     return df
 
@@ -237,14 +308,28 @@ def main() -> None:
     args = parse_args()
     input_path = Path(args.input).expanduser().resolve()
     output_path = Path(args.output).expanduser().resolve()
+    failure_path = Path(args.pdok_failures).expanduser().resolve()
+    correction_path = Path(args.pdok_corrections).expanduser().resolve()
     df = pd.read_csv(input_path, dtype=str, keep_default_na=False)
     if args.max_rows is not None:
         df = df.head(args.max_rows)
     df = ensure_address_columns(df)
     df = expand_house_numbers(df)
-    df = fill_missing_postcodes(df, PdokClient())
+    failures: List[dict] = []
+    corrections: List[dict] = []
+    pdok_client = PdokClient()
+    df = fill_missing_postcodes(df, pdok_client, failures)
+    df = fill_canonical_postcodes(df, pdok_client, corrections)
     df[COL_ADDRESS_KEY] = df.apply(build_address_key, axis=1)
     df.to_csv(output_path, index=False)
+    if failures:
+        failure_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(failures).to_csv(failure_path, index=False)
+        print(f"[info] Wrote PDOK failures to {failure_path} ({len(failures)} rows).")
+    if corrections:
+        correction_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(corrections).to_csv(correction_path, index=False)
+        print(f"[info] Wrote PDOK corrections to {correction_path} ({len(corrections)} rows).")
     print(f"[info] Wrote {output_path} with {len(df)} rows.")
 
 

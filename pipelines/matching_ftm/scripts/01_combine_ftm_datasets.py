@@ -137,7 +137,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    stats = combine(args.animals, args.addresses, args.output, include_missing=args.include_missing)
+    addresses_path = args.addresses
+    v2_path = RAW_DIR / "FTM_addresses_v2.csv"
+    if addresses_path == RAW_DIR / "FTM_addresses.csv" and v2_path.exists():
+        addresses_path = v2_path
+        print(f"[info] Using updated FTM addresses: {addresses_path}")
+    stats = combine(args.animals, addresses_path, args.output, include_missing=args.include_missing)
     print(
         f"Wrote {stats['rows_out']} rows to {args.output} "
         f"(source rows: {stats['rows_in']}, missing addresses: {stats['rows_missing_address']})."
