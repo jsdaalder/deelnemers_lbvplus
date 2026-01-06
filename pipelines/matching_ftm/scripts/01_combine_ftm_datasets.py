@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
+import unicodedata
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -18,6 +20,33 @@ def load_addresses(path: Path) -> Tuple[Dict[str, dict], List[str]]:
         fieldnames = reader.fieldnames or []
         mapping = {row["rel_anoniem"]: row for row in reader if row.get("rel_anoniem")}
     return mapping, fieldnames
+
+
+def _fold(text: str) -> str:
+    if text is None:
+        return ""
+    value = str(text).strip().lower()
+    value = unicodedata.normalize("NFKD", value)
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    return value
+
+
+def _clean_text(text: str) -> str:
+    value = _fold(text)
+    value = re.sub(r"[^\w\s]", " ", value)
+    return " ".join(value.split())
+
+
+def _clean_code(text: str) -> str:
+    value = _fold(text)
+    value = re.sub(r"\s+", "", value)
+    return re.sub(r"[^\w-]", "", value)
+
+
+def _clean_postcode(text: str) -> str:
+    value = _fold(text)
+    value = re.sub(r"\s+", "", value).upper()
+    return re.sub(r"[^\w]", "", value)
 
 
 def combine(animals_path: Path, addresses_path: Path, output_path: Path, include_missing: bool = False) -> dict:
@@ -55,15 +84,15 @@ def combine(animals_path: Path, addresses_path: Path, output_path: Path, include
                         straat = address_row.get("B_STRAATNAAM", "")
                         huisnr = address_row.get("B_HUIS_NR", "")
                         toevoeg = address_row.get("B_HUIS_NR_TOEV", "")
-                        pc = (address_row.get("B_POSTCODE", "") or "").replace(" ", "").lower()
+                        pc = address_row.get("B_POSTCODE", "")
                         plaats = address_row.get("B_PLAATS", "")
                         merged[field] = "|".join(
                             [
-                                str(straat).lower().strip(),
-                                str(huisnr).lower().strip(),
-                                str(toevoeg).lower().strip(),
-                                pc,
-                                str(plaats).lower().strip(),
+                                _clean_text(straat),
+                                _clean_code(huisnr),
+                                _clean_code(toevoeg),
+                                _clean_postcode(pc),
+                                _clean_text(plaats),
                             ]
                         )
                     else:

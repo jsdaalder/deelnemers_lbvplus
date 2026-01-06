@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import re
+import unicodedata
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
@@ -37,17 +38,24 @@ def normalize_name(name: str) -> str:
     """Lowercase, strip punctuation, drop common legal/entity stopwords, sort tokens."""
     if not name:
         return ""
-    cleaned = re.sub(r"[^a-zA-Z0-9\\s]", " ", name.lower())
+    cleaned = unicodedata.normalize("NFKD", name.lower())
+    cleaned = "".join(ch for ch in cleaned if not unicodedata.combining(ch))
+    cleaned = re.sub(r"[^\w\s]", " ", cleaned)
     tokens = [t for t in cleaned.split() if t and t not in LEGAL_STOPWORDS]
     return " ".join(sorted(tokens))
 
 
 def normalize_postcode(pc: str) -> str:
-    return "".join(pc.split()).lower()
+    text = unicodedata.normalize("NFKD", pc or "")
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return re.sub(r"[^\w]", "", "".join(text.split()).upper())
 
 
 def normalize_street(street: str) -> str:
-    return " ".join(street.lower().split())
+    text = unicodedata.normalize("NFKD", street or "")
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^\w\s]", " ", text.lower())
+    return " ".join(text.split())
 
 
 def load_fosfaat(path: Path) -> List[dict]:

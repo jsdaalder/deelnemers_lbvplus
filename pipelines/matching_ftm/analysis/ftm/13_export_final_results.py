@@ -312,7 +312,26 @@ def main() -> None:
     if overview_png.exists():
         copied.append(copy_with_date(overview_png, dated_dir, "chart_all", date_tag))
 
+    # Copy individual charts (including region subfolders) into final bundle.
+    for chart_path in charts_dir.rglob("*"):
+        if not chart_path.is_file():
+            continue
+        if chart_path.suffix.lower() not in {".png", ".pdf"}:
+            continue
+        rel_path = chart_path.relative_to(charts_dir)
+        dest_path = dated_dir / rel_path
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(chart_path, dest_path)
+        copied.append(dest_path)
+
     # One-row-per-farm export (no animal filtering).
+    farm_group_col = "farm_id_new" if "farm_id_new" in df_full.columns else "farm_id"
+    if farm_group_col != "farm_id":
+        df_full = df_full.copy()
+        df_full["farm_id_export"] = df_full["farm_id_new"].where(
+            df_full["farm_id_new"].notna(), df_full["farm_id"]
+        )
+        farm_group_col = "farm_id_export"
     farm_agg = {
         "rel_anoniem": lambda x: " | ".join(sorted(set(str(v) for v in x if pd.notna(v)))),
         "source": lambda x: " | ".join(sorted(set(str(v) for v in x if pd.notna(v)))),
@@ -327,9 +346,11 @@ def main() -> None:
         "URL_BEKENDMAKING": "first",
         "URL_PDF": "first",
     }
+    if farm_group_col != "farm_id" and "farm_id" in df_full.columns:
+        farm_agg["farm_id"] = lambda x: " | ".join(sorted(set(str(v) for v in x if pd.notna(v))))
     farm_agg = {k: v for k, v in farm_agg.items() if k in df.columns}
     if farm_agg:
-        farm_view = df_full.groupby("farm_id", as_index=False).agg(farm_agg)
+        farm_view = df_full.groupby(farm_group_col, as_index=False).agg(farm_agg)
         farm_out = dated_dir / "master_participants_one_row.csv"
         farm_view.to_csv(farm_out, index=False)
         copied.append(farm_out)

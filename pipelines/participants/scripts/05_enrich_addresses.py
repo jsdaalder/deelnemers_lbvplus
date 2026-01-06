@@ -23,6 +23,7 @@ from typing import Dict, Iterable, List
 
 import pandas as pd
 import requests
+import unicodedata
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "data"
@@ -214,7 +215,10 @@ def fill_missing_postcodes(df: pd.DataFrame, client: PdokClient) -> pd.DataFrame
 
 def normalize_component(value: str) -> str:
     text = (value or "").strip().lower()
-    return re.sub(r"\s+", " ", text)
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^\w\s]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def build_address_key(row: pd.Series) -> str:

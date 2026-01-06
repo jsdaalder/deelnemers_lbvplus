@@ -6,6 +6,7 @@ import csv
 from pathlib import Path
 from typing import Dict, Iterable, List, Set
 import re
+import unicodedata
 from collections import defaultdict
 import pandas as pd
 
@@ -184,17 +185,32 @@ def normalize_name(val: str) -> str:
 
 
 def normalize_address(straat: str, huisnr: str, postcode: str, plaats: str) -> str:
-    def clean(x: str) -> str:
+    def fold(x: str) -> str:
         if not x:
             return ""
-        x = x.lower().strip()
-        x = re.sub(r"\\s+", " ", x)
-        return x
+        val = str(x).strip().lower()
+        val = unicodedata.normalize("NFKD", val)
+        return "".join(ch for ch in val if not unicodedata.combining(ch))
 
-    s = clean(straat)
-    h = clean(str(huisnr))
-    pc = clean(postcode).replace(" ", "")
-    pl = clean(plaats)
+    def clean_text(x: str) -> str:
+        val = fold(x)
+        val = re.sub(r"[^\w\s]", " ", val)
+        return " ".join(val.split())
+
+    def clean_code(x: str) -> str:
+        val = fold(x)
+        val = re.sub(r"\s+", "", val)
+        return re.sub(r"[^\w-]", "", val)
+
+    def clean_postcode(x: str) -> str:
+        val = fold(x)
+        val = re.sub(r"\s+", "", val).upper()
+        return re.sub(r"[^\w]", "", val)
+
+    s = clean_text(straat)
+    h = clean_code(huisnr)
+    pc = clean_postcode(postcode)
+    pl = clean_text(plaats)
     return "|".join([s, h, "", pc, pl])
 
 
@@ -551,17 +567,28 @@ def main() -> None:
 
     # Canonical rel->permit farm_id map
     rel_to_permit_farm = {}
+    rel_to_permit_farm_new = {}
+    farm_id_to_new = {}
     for r in enriched_permits:
         rel = r.get("rel_anoniem", "")
         fid = r.get("farm_id", "")
         if rel and fid and rel not in rel_to_permit_farm:
             rel_to_permit_farm[rel] = fid
+        fid_new = r.get("farm_id_new", "")
+        if rel and fid_new and rel not in rel_to_permit_farm_new:
+            rel_to_permit_farm_new[rel] = fid_new
+        if fid and fid_new and fid not in farm_id_to_new:
+            farm_id_to_new[fid] = fid_new
 
     # Adjust minfin farm_ids when overlapping rel exists in permits
     for r in enriched_minfin:
         rel = r.get("rel_anoniem", "")
         if rel and rel in rel_to_permit_farm:
             r["farm_id"] = rel_to_permit_farm[rel]
+            if rel in rel_to_permit_farm_new:
+                r["farm_id_new"] = rel_to_permit_farm_new[rel]
+        if not r.get("farm_id_new") and r.get("farm_id") in farm_id_to_new:
+            r["farm_id_new"] = farm_id_to_new[r["farm_id"]]
 
     # Participants merged with canonical farm_ids and de-duplication
     participant_rows: List[dict] = []

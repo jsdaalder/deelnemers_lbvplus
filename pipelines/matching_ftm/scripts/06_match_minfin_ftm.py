@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Set, Tuple
@@ -12,17 +14,36 @@ RAW_DIR = REPO_ROOT / "data" / "raw"
 PROCESSED_DIR = REPO_ROOT / "data" / "processed"
 
 
-def _clean(text: str, drop_spaces: bool = False) -> str:
+def _fold(text: str) -> str:
     if text is None:
         return ""
-    cleaned = " ".join(str(text).strip().lower().split())
-    return cleaned.replace(" ", "") if drop_spaces else cleaned
+    value = str(text).strip().lower()
+    value = unicodedata.normalize("NFKD", value)
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    return value
+
+
+def _clean_text(text: str) -> str:
+    value = _fold(text)
+    value = re.sub(r"[^\w\s]", " ", value)
+    return " ".join(value.split())
+
+
+def _clean_code(text: str) -> str:
+    value = _fold(text)
+    value = re.sub(r"\s+", "", value)
+    return re.sub(r"[^\w-]", "", value)
+
+
+def _clean_postcode(text: str) -> str:
+    value = _fold(text)
+    value = re.sub(r"\s+", "", value).upper()
+    return re.sub(r"[^\w]", "", value)
 
 
 def normalize_name(name: str) -> str:
     """Lowercase alnum tokens, drop common punctuation/spaces."""
-    import re
-    cleaned = re.sub(r"[^a-zA-Z0-9\\s]", " ", name.lower())
+    cleaned = _clean_text(name)
     return " ".join(cleaned.split())
 
 
@@ -30,11 +51,11 @@ def make_key(street: str, number: str, addition: str, postcode: str, city: str) 
     """Normalize address parts to a consistent key."""
     return "|".join(
         [
-            _clean(street),
-            _clean(number),
-            _clean(addition),
-            _clean(postcode, drop_spaces=True),
-            _clean(city),
+            _clean_text(street),
+            _clean_code(number),
+            _clean_code(addition),
+            _clean_postcode(postcode),
+            _clean_text(city),
         ]
     )
 
@@ -90,7 +111,7 @@ def join_minfin(
         with permit_kvk_results.open(newline="", encoding="utf-8") as handle:
             for row in csv.DictReader(handle):
                 fid = row.get("farm_id", "")
-                kvk = _clean(row.get("kvk_nummer", ""))
+                kvk = _clean_code(row.get("kvk_nummer", ""))
                 kvk = kvk.replace(".0", "") if kvk.endswith(".0") else kvk
                 name = normalize_name(row.get("company_name", ""))
                 if kvk and kvk not in permit_kvk_to_farm:
@@ -116,7 +137,7 @@ def join_minfin(
         reader = csv.DictReader(src)
         for row in reader:
             kvk_raw = row.get("kvk_nummer_minfin", "") or row.get("kvk_nummer", "")
-            kvk = _clean(kvk_raw)
+            kvk = _clean_code(kvk_raw)
             kvk = kvk.replace(".0", "") if kvk.endswith(".0") else kvk
             row["kvk_nummer_minfin"] = kvk
             row["norm_company"] = normalize_name(row.get("company_name", "") or row.get("ontvanger", ""))

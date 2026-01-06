@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import os
 import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
@@ -22,18 +23,24 @@ url = "https://web-api.kvk.nl/zoeken/v3/search"
 # Update cookie/profileId/User-Agent from a live browser request if you get blocked/empty responses.
 headers = {
     # Cookie/profileId/User-Agent copied from the working permit lookup (refresh from browser if requests start failing).
-    "cookie": "TS01be00eb=014252a75b1c0c90a1249801f389b98a068b5c69667a6869475efeff5491ec9147a842fe9964fc6b8436c999efc56fe55e4a79bde5",
+    "cookie": os.environ.get(
+        "KVK_COOKIE",
+        "TS01be00eb=014252a75b1c0c90a1249801f389b98a068b5c69667a6869475efeff5491ec9147a842fe9964fc6b8436c999efc56fe55e4a79bde5",
+    ),
     "Host": "web-api.kvk.nl",
     "Accept": "application/json, application/hal+json",
     "Accept-Encoding": "gzip, deflate, br, zstd",
     "Accept-Language": "en-US,en;q=0.9",
     "Connection": "keep-alive",
     "Origin": "https://www.kvk.nl",
-    "profileId": "5C10A89D-635E-49CC-94B8-042DD533B64A",
+    "profileId": os.environ.get("KVK_PROFILE_ID", "5C10A89D-635E-49CC-94B8-042DD533B64A"),
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "same-site",
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+    "User-Agent": os.environ.get(
+        "KVK_USER_AGENT",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+    ),
 }
 
 

@@ -49,15 +49,34 @@ ALL_CHART_FILENAMES = set(CHART_FILES.values())
 
 # Utility: normalize province names for filtering and filenames
 def normalize_province(value: str) -> str:
-    return str(value or "").strip().lower()
+    normalized = str(value or "").strip().lower()
+    normalized = normalized.replace("provincie ", "")
+    collapsed = normalized.replace("-", " ").replace("_", " ").replace(".", " ")
+    collapsed = " ".join(collapsed.split())
+    aliases = {
+        "fryslan": "friesland",
+        "fryslân": "friesland",
+        "friesland": "friesland",
+        "noord brabant": "noord-brabant",
+        "noordbrabant": "noord-brabant",
+        "brabant": "noord-brabant",
+        "n brabant": "noord-brabant",
+        "zuid holland": "zuid-holland",
+        "zuidholland": "zuid-holland",
+        "z holland": "zuid-holland",
+        "noord holland": "noord-holland",
+        "noordholland": "noord-holland",
+        "n holland": "noord-holland",
+    }
+    return aliases.get(collapsed, aliases.get(normalized, collapsed))
 
 
 def slugify_label(label: str) -> str:
     return normalize_province(label).replace(" ", "_").replace("/", "_")
 
 
-def load_woonplaatsen_map(csv_path: Path) -> dict[str, str]:
-    """Return mapping from normalized place name to proper-cased province name."""
+def load_woonplaatsen_map(csv_path: Path) -> dict[str, list[str]]:
+    """Return mapping from normalized place name to one or more province names."""
     if not csv_path.exists():
         return {}
     try:
@@ -67,7 +86,16 @@ def load_woonplaatsen_map(csv_path: Path) -> dict[str, str]:
     df = df.dropna(subset=["plaats", "provincie"])
     df["plaats_norm"] = df["plaats"].astype(str).str.strip().str.lower()
     df["prov_clean"] = df["provincie"].astype(str).str.strip()
-    return dict(zip(df["plaats_norm"], df["prov_clean"]))
+    place_map: dict[str, list[str]] = {}
+    for _, row in df.iterrows():
+        place = row["plaats_norm"]
+        prov = row["prov_clean"]
+        if not place or not prov:
+            continue
+        provs = place_map.setdefault(place, [])
+        if prov not in provs:
+            provs.append(prov)
+    return place_map
 
 
 # Shared styling so future charts stay consistent
@@ -398,8 +426,8 @@ def filter_by_province(df: pd.DataFrame, province: str) -> pd.DataFrame:
     return df.loc[norm == target].copy()
 
 
-def attach_province(df: pd.DataFrame, place_to_province: dict[str, str]) -> pd.DataFrame:
-    """Set Province strictly from woonplaatsen map; ignore any existing value."""
+def attach_province(df: pd.DataFrame, place_to_province: dict[str, list[str]]) -> pd.DataFrame:
+    """Set Province from woonplaatsen map, disambiguating with Instantie_latest when needed."""
     if not place_to_province:
         return df
 
@@ -413,9 +441,17 @@ def attach_province(df: pd.DataFrame, place_to_province: dict[str, str]) -> pd.D
             if pd.isna(val) or not str(val).strip():
                 continue
             norm = normalize_province(str(val))
-            prov = place_to_province.get(norm, "")
-            if prov:
-                return prov
+            provs = place_to_province.get(norm, [])
+            if not provs:
+                continue
+            if len(provs) == 1:
+                return provs[0]
+            inst = row.get("Instantie_latest", "")
+            inst_norm = normalize_province(str(inst))
+            for prov in provs:
+                if normalize_province(prov) == inst_norm:
+                    return prov
+            return provs[0]
         return ""
 
     df = df.copy()
@@ -1481,6 +1517,10 @@ def generate_charts(
             png.unlink()
 
     df_raw = pd.read_csv(master_path)
+    if "farm_id_new" in df_raw.columns and df_raw["farm_id_new"].notna().any():
+        # Prefer stable IDs for chart aggregation but keep fallback to legacy IDs when missing.
+        df_raw["farm_id_legacy"] = df_raw.get("farm_id")
+        df_raw["farm_id"] = df_raw["farm_id_new"].where(df_raw["farm_id_new"].notna(), df_raw["farm_id"])
     place_map = load_woonplaatsen_map(WOONPLAATSEN_CSV)
     df_raw = attach_province(df_raw, place_map)
     # mark farms with animals flag (mutated downstream)

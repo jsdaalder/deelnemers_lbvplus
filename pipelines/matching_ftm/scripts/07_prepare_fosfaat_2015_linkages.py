@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
@@ -12,22 +14,42 @@ RAW_DIR = REPO_ROOT / "data" / "raw"
 PROCESSED_DIR = REPO_ROOT / "data" / "processed"
 
 
-def _clean(text: str, drop_spaces: bool = False) -> str:
+def _fold(text: str) -> str:
     if text is None:
         return ""
-    cleaned = " ".join(text.strip().lower().split())
-    return cleaned.replace(" ", "") if drop_spaces else cleaned
+    value = str(text).strip().lower()
+    value = unicodedata.normalize("NFKD", value)
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    return value
+
+
+def _clean_text(text: str) -> str:
+    value = _fold(text)
+    value = re.sub(r"[^\w\s]", " ", value)
+    return " ".join(value.split())
+
+
+def _clean_code(text: str) -> str:
+    value = _fold(text)
+    value = re.sub(r"\s+", "", value)
+    return re.sub(r"[^\w-]", "", value)
+
+
+def _clean_postcode(text: str) -> str:
+    value = _fold(text)
+    value = re.sub(r"\s+", "", value).upper()
+    return re.sub(r"[^\w]", "", value)
 
 
 def make_key(street: str, number: str, addition: str, postcode: str, city: str) -> str:
     """Normalize address parts to a consistent key."""
     return "|".join(
         [
-            _clean(street),
-            _clean(number),
-            _clean(addition),
-            _clean(postcode, drop_spaces=True),
-            _clean(city),
+            _clean_text(street),
+            _clean_code(number),
+            _clean_code(addition),
+            _clean_postcode(postcode),
+            _clean_text(city),
         ]
     )
 

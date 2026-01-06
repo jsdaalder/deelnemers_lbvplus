@@ -1,6 +1,7 @@
 import argparse
 import pandas as pd
 from collections import defaultdict
+import hashlib
 from pathlib import Path
 
 
@@ -74,6 +75,9 @@ def main():
     df = df[df["AddressKey"].notna() & (df["AddressKey"] != "")]
     df = df[df["Datum"].notna()]
 
+    # Normalize AddressKey casing for case-insensitive matching downstream.
+    df["AddressKey"] = df["AddressKey"].astype(str).str.strip().str.lower()
+
     # ---------- 2. Build mapping: AddressKey -> doc_ids ----------
     addr_to_docs = defaultdict(set)
 
@@ -100,9 +104,14 @@ def main():
     root_to_farm_id = {
         root: f"FARM{str(i + 1).zfill(4)}" for i, root in enumerate(roots)
     }
+    root_to_farm_id_new = {
+        root: f"FARM{hashlib.sha1(root.encode('utf-8')).hexdigest()[:12].upper()}"
+        for root in roots
+    }
 
     df["farm_root"] = df["doc_id"].apply(uf.find)
     df["farm_id"] = df["farm_root"].map(root_to_farm_id)
+    df["farm_id_new"] = df["farm_root"].map(root_to_farm_id_new)
 
     # ---------- 5. Determine latest record per farm ----------
     # For each farm_id, take the row with the maximum Datum
@@ -124,6 +133,7 @@ def main():
     addresses = (
         df[[
             "farm_id",
+            "farm_id_new",
             "AddressKey",
             "B_STRAATNAAM",
             "B_HUIS_NR",
