@@ -3,6 +3,7 @@
 __pycache__/
 experiments/llm_improvement_testing/*.csv
 .cache/
+.mplconfig/
 
 # Global data/media (only keep selected charts in final_results)
 *.csv
@@ -34,6 +35,10 @@ final_results/**
 !final_results/2026_01_07/18_chart_draft_def_by_province.png
 !final_results/2026_01_07/cbs_dieraantallen_2021.csv
 deelnemers_lbv_lbvplus_*.csv
+
+# Local chart outputs
+pipelines/matching_ftm/analysis/ftm/charts/2026_01_06/
+pipelines/matching_ftm/analysis/ftm/charts/2026_01_07/
 
 # Analysis outputs
 
