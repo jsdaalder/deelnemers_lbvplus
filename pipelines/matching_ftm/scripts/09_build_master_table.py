@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime
+import hashlib
 from pathlib import Path
 from typing import Dict, Iterable, List, Set
 import re
@@ -15,6 +17,7 @@ RAW_DIR = PIPE_ROOT / "data" / "raw"
 PROCESSED_DIR = PIPE_ROOT / "data" / "processed"
 
 MASTER_PATH = PROCESSED_DIR / "master_permits.csv"
+REL_FARM_ID_MAP = PROCESSED_DIR / "farm_id_new_rel_map.csv"
 EXCLUDE_FOS_FARMS = {"FARM0082"}  # user-specified exclusions for fosfaat fallback
 WOONPLAATSEN_CSV = RAW_DIR / "woonplaatsen.csv"
 
@@ -79,6 +82,29 @@ def load_kvk_results(path: Path) -> Dict[str, dict]:
             "kvk_api_postcode": row.get("bezoek_postcode", "") or row.get("post_postcode", ""),
         }
     return hits
+
+
+def load_rel_farm_id_map(path: Path) -> tuple[Dict[str, str], Dict[str, str]]:
+    mapping: Dict[str, str] = {}
+    created: Dict[str, str] = {}
+    if not path.exists():
+        return mapping, created
+    for row in read_csv(path):
+        rel = row.get("rel_anoniem", "")
+        fid = row.get("farm_id_new", "")
+        if rel and fid and rel not in mapping:
+            mapping[rel] = fid
+            created[rel] = row.get("created_at", "")
+    return mapping, created
+
+
+def save_rel_farm_id_map(path: Path, mapping: Dict[str, str], created: Dict[str, str]) -> None:
+    rows = []
+    for rel, fid in sorted(mapping.items()):
+        rows.append(
+            {"rel_anoniem": rel, "farm_id_new": fid, "created_at": created.get(rel, "")}
+        )
+    write_csv(path, rows, ["rel_anoniem", "farm_id_new", "created_at"])
 
 
 def aggregate_animals(rows: List[dict]) -> List[dict]:
@@ -387,6 +413,8 @@ def main() -> None:
 
     enriched_permits: List[dict] = []
     enriched_minfin: List[dict] = []
+    rel_id_map, rel_id_created = load_rel_farm_id_map(REL_FARM_ID_MAP)
+    today = datetime.date.today().isoformat()
 
     def ensure_year_fields(row: dict) -> None:
         if not row.get("jaar"):
@@ -421,6 +449,16 @@ def main() -> None:
                     prov = woon_map[cand]
                     break
         row["Province_from_woonplaats"] = prov
+
+    def ensure_rel_farm_id(rel: str) -> str:
+        if not rel:
+            return ""
+        if rel in rel_id_map:
+            return rel_id_map[rel]
+        fid = f"FARM{hashlib.sha1(rel.encode('utf-8')).hexdigest()[:12].upper()}"
+        rel_id_map[rel] = fid
+        rel_id_created[rel] = today
+        return fid
 
     # Permit-derived rows
     for permit in permit_rows:
@@ -615,6 +653,16 @@ def main() -> None:
         if (not lm or lm == METHOD_UNLINKED) and r.get("rel_anoniem"):
             r["link_method"] = "linked_via_rel"
 
+    # Assign stable farm_id_new to rel_anoniem (minfin-first to preserve prior rel-based IDs).
+    for r in enriched_minfin:
+        rel = r.get("rel_anoniem", "")
+        if rel:
+            r["farm_id_new"] = ensure_rel_farm_id(rel)
+    for r in enriched_permits:
+        rel = r.get("rel_anoniem", "")
+        if rel:
+            r["farm_id_new"] = ensure_rel_farm_id(rel)
+
     # Canonical rel->permit farm_id map
     rel_to_permit_farm = {}
     rel_to_permit_farm_new = {}
@@ -666,6 +714,7 @@ def main() -> None:
     write_csv(args.output_permits, enriched_permits, base_fieldnames)
     write_csv(args.output_minfin, enriched_minfin, base_fieldnames)
     write_csv(args.output_participants, participant_rows, base_fieldnames)
+    save_rel_farm_id_map(REL_FARM_ID_MAP, rel_id_map, rel_id_created)
     print(
         f"Wrote master tables: permits={len(enriched_permits)} -> {args.output_permits}, "
         f"minfin={len(enriched_minfin)} -> {args.output_minfin}, "

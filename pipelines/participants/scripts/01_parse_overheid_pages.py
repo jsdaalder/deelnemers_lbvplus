@@ -215,7 +215,7 @@ def load_existing_rows(path: Path) -> Tuple[List[Dict[str, str]], Set[Tuple[str,
 
 
 def augment_query_with_since(query: str, since_iso: str) -> str:
-    clause = f'dcterms.available>="{since_iso}"'
+    clause = f'dt.available>="{since_iso}"'
     query = query.strip()
     if not query:
         return clause

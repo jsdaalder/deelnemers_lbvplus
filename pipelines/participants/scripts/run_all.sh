@@ -51,32 +51,34 @@ maybe_step1() {
       die "MODE=local requires FILES=\"file1.html file2.html ...\""
     fi
     IFS=' ' read -r -a FILE_ARR <<< "$FILES"
-    refresh_flag=()
+    info "Step 01: parse overheid pages (local)"
+    cmd=(
+      "$PYTHON" scripts/01_parse_overheid_pages.py
+      --mode local
+      --files "${FILE_ARR[@]}"
+      --out data/01_overheid_results.csv
+    )
     if [[ -n "$REFRESH_ALL" ]]; then
-      refresh_flag=(--refresh-all)
+      cmd+=(--refresh-all)
     fi
-info "Step 01: parse overheid pages (local)"
-"$PYTHON" scripts/01_parse_overheid_pages.py \
-  --mode local \
-  --files "${FILE_ARR[@]}" \
-  --out data/01_overheid_results.csv \
-  "${refresh_flag[@]}"
+    "${cmd[@]}"
   elif [[ "$MODE" == "api" ]]; then
     if [[ -z "$API_QUERY" ]]; then
       die "MODE=api requires API_QUERY='...'"
     fi
-    refresh_flag=()
-    if [[ -n "$REFRESH_ALL" ]]; then
-      refresh_flag=(--refresh-all)
-    fi
     info "Step 01: parse overheid pages (API)"
-    "$PYTHON" scripts/01_parse_overheid_pages.py \
-      --mode api \
-      --api-query "$API_QUERY" \
-      --api-max-records "$API_MAX" \
-      --api-timeout "$API_TIMEOUT" \
-      --out data/01_overheid_results.csv \
-      "${refresh_flag[@]}"
+    cmd=(
+      "$PYTHON" scripts/01_parse_overheid_pages.py
+      --mode api
+      --api-query "$API_QUERY"
+      --api-max-records "$API_MAX"
+      --api-timeout "$API_TIMEOUT"
+      --out data/01_overheid_results.csv
+    )
+    if [[ -n "$REFRESH_ALL" ]]; then
+      cmd+=(--refresh-all)
+    fi
+    "${cmd[@]}"
   else
     die "Unknown MODE=$MODE (use 'local' or 'api')."
   fi
@@ -155,6 +157,11 @@ for prov in sorted(farm_latest["Instantie_latest"].unique()):
             f"irrevocable_on_{report_date.strftime('%Y_%m_%d')}": irrevocable,
         }
     )
+
+df_out = pd.DataFrame(rows)
+df_out.to_csv("data/06b_province_stage_overview.csv", index=False)
+print(f"[info] Wrote data/06b_province_stage_overview.csv ({len(df_out)} rows).")
+PY
 
 info "Step 07: sync participants to matching pipelines"
 DEST_DIR_FTM="$REPO_ROOT/pipelines/matching_ftm/data/raw"

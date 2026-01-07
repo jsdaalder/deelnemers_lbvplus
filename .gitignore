@@ -4,10 +4,9 @@ __pycache__/
 experiments/llm_improvement_testing/*.csv
 .cache/
 
-# Global data/media (only keep charts in final_results)
+# Global data/media (only keep selected charts in final_results)
 *.csv
 *.png
-!final_results/**/*.png
 !pipelines/matching_ftm/analysis/ftm/charts/**/*.png
 **/.~lock.*
 
@@ -26,8 +25,14 @@ pipelines/matching_and_analysis/data/raw/.~lock.*
 pipelines/matching_and_analysis/data/processed/charts/*
 pipelines/matching_and_analysis/data/processed/*.pdf
 
-# Final outputs (CSV only; charts are tracked)
-final_results/**/*.csv
+# Final outputs (only selected charts + CBS reference)
+final_results/**
+!final_results/2026_01_07/
+!final_results/2026_01_07/7_chart_permit_stages.png
+!final_results/2026_01_07/15_chart_companies_by_category_known.png
+!final_results/2026_01_07/17_chart_buyout_share_cbs.png
+!final_results/2026_01_07/18_chart_draft_def_by_province.png
+!final_results/2026_01_07/cbs_dieraantallen_2021.csv
 deelnemers_lbv_lbvplus_*.csv
 
 # Analysis outputs

@@ -3,6 +3,7 @@ import pandas as pd
 from collections import defaultdict
 import hashlib
 from pathlib import Path
+import datetime
 
 
 class UnionFind:
@@ -26,6 +27,7 @@ DATA_DIR = REPO_ROOT / "data"
 # Accepts the step 05 output directly; legacy 06_vergunningen files are archived.
 DEFAULT_INPUT = DATA_DIR / "05_lbv_enriched_addresses.csv"
 DEFAULT_OUTPUT = DATA_DIR / "06_deelnemers_lbv_lbvplus.csv"
+DEFAULT_FARM_ID_MAP = DATA_DIR / "farm_id_new_map.csv"
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,6 +50,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optioneel maximum aantal rijen voor snelle checks.",
     )
+    parser.add_argument(
+        "--farm-id-map",
+        default=str(DEFAULT_FARM_ID_MAP),
+        help="CSV met stabiele farm_id_new mapping (default: data/farm_id_new_map.csv).",
+    )
     return parser.parse_args()
 
 
@@ -57,6 +64,7 @@ def main():
     # ---------- 1. Load input ----------
     infile = Path(args.input).expanduser().resolve()
     outfile = Path(args.output).expanduser().resolve()
+    mapfile = Path(args.farm_id_map).expanduser().resolve()
 
     # Read as strings; we'll parse dates separately
     df = pd.read_csv(infile, dtype=str)
@@ -104,21 +112,54 @@ def main():
     root_to_farm_id = {
         root: f"FARM{str(i + 1).zfill(4)}" for i, root in enumerate(roots)
     }
-    root_to_farm_id_new = {
-        root: f"FARM{hashlib.sha1(root.encode('utf-8')).hexdigest()[:12].upper()}"
-        for root in roots
-    }
+
+    # Load stable farm_id_new map (doc_id -> farm_id_new)
+    existing_map = {}
+    existing_created = {}
+    if mapfile.exists():
+        map_df = pd.read_csv(mapfile, dtype=str, keep_default_na=False)
+        for _, row in map_df.iterrows():
+            doc_id = row.get("doc_id", "").strip()
+            farm_id_new = row.get("farm_id_new", "").strip()
+            created_at = row.get("created_at", "").strip()
+            if doc_id and farm_id_new:
+                existing_map[doc_id] = farm_id_new
+                existing_created[doc_id] = created_at
+
+    def _stable_farm_id(doc_ids: list[str]) -> str:
+        existing_ids = sorted({existing_map[doc_id] for doc_id in doc_ids if doc_id in existing_map})
+        if existing_ids:
+            return existing_ids[0]
+        seed = sorted(doc_ids)[0]
+        return f"FARM{hashlib.sha1(seed.encode('utf-8')).hexdigest()[:12].upper()}"
+
+    root_to_farm_id_new = {}
+    for root in roots:
+        doc_ids = sorted([doc_id for doc_id in df["doc_id"].unique() if uf.find(doc_id) == root])
+        root_to_farm_id_new[root] = _stable_farm_id(doc_ids)
+        for doc_id in doc_ids:
+            if doc_id not in existing_map:
+                existing_map[doc_id] = root_to_farm_id_new[root]
+                existing_created[doc_id] = datetime.date.today().isoformat()
 
     df["farm_root"] = df["doc_id"].apply(uf.find)
     df["farm_id"] = df["farm_root"].map(root_to_farm_id)
     df["farm_id_new"] = df["farm_root"].map(root_to_farm_id_new)
+
+    # Persist stable farm_id_new map for future runs
+    map_rows = [
+        {"doc_id": doc_id, "farm_id_new": farm_id, "created_at": existing_created.get(doc_id, "")}
+        for doc_id, farm_id in sorted(existing_map.items())
+    ]
+    mapfile.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(map_rows).to_csv(mapfile, index=False)
 
     # ---------- 5. Determine latest record per farm ----------
     # For each farm_id, take the row with the maximum Datum
     idx_latest_per_farm = df.groupby("farm_id")["Datum"].idxmax()
     latest = df.loc[idx_latest_per_farm].copy()
 
-    latest_status = latest.set_index("farm_id")[[
+    latest_cols = [
         "doc_id",
         "Titel",
         "Datum",
@@ -126,7 +167,10 @@ def main():
         "STAGE",
         "URL_BEKENDMAKING",
         "URL_PDF",
-    ]]
+    ]
+    if "Stage_manual" in latest.columns:
+        latest_cols.append("Stage_manual")
+    latest_status = latest.set_index("farm_id")[latest_cols]
 
     # ---------- 6. Build output: one row per (farm_id, AddressKey) ----------
     # Unique farm/address combinations
@@ -205,8 +249,12 @@ def main():
         "STAGE": "stage_latest_llm",
     })
 
-    # Provide an empty manual stage column next to the LLM stage
-    out["stage_latest_manual"] = ""
+    if "Stage_manual" in out.columns:
+        out["stage_latest_manual"] = out["Stage_manual"].fillna("")
+        out = out.drop(columns=["Stage_manual"])
+    else:
+        # Provide an empty manual stage column next to the LLM stage
+        out["stage_latest_manual"] = ""
     # ensure ordering keeps manual column next to llm column
     cols = list(out.columns)
     if "stage_latest_llm" in cols and "stage_latest_manual" in cols:

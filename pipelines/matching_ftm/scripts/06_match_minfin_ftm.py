@@ -55,6 +55,26 @@ PROVINCE_SUFFIXES = {
     "gr",
 }
 
+PLACE_ALIAS_MAP = {
+    "st": "sint",
+    "st.": "sint",
+    "sint": "st",
+}
+
+
+def _normalize_ij_y(text: str) -> str:
+    return re.sub(r"\byssel", "ijssel", text)
+
+
+def _normalize_place_text(text: str) -> str:
+    cleaned = _clean_text(text)
+    return _normalize_ij_y(cleaned)
+
+
+def _normalize_street_text(text: str) -> str:
+    cleaned = _clean_text(text)
+    return _normalize_ij_y(cleaned)
+
 PLACE_STOPWORDS = {"aan", "de", "den", "der", "het", "in", "op", "te", "ten", "ter", "van"}
 PLACE_TAIL_TOKENS = {
     "broek",
@@ -95,13 +115,16 @@ def normalize_name(name: str) -> str:
 
 
 def _place_variants(place: str) -> List[str]:
-    cleaned = _clean_text(place)
+    cleaned = _normalize_place_text(place)
     if not cleaned:
         return [""]
     parts = cleaned.split()
     if parts and parts[-1] in PROVINCE_SUFFIXES:
         parts = parts[:-1]
     variants = [" ".join(parts).strip()]
+    if parts and parts[0] in PLACE_ALIAS_MAP:
+        alias = PLACE_ALIAS_MAP[parts[0]]
+        variants.append(" ".join([alias] + parts[1:]).strip())
     if len(parts) > 1:
         variants.append(parts[0])
         no_stop = [p for p in parts if p not in PLACE_STOPWORDS]
@@ -120,7 +143,7 @@ def _place_variants(place: str) -> List[str]:
 
 
 def _street_variants(street: str, max_len: int = 20) -> List[str]:
-    cleaned = _clean_text(street)
+    cleaned = _normalize_street_text(street)
     if not cleaned:
         return [""]
     variants = [cleaned]
@@ -130,6 +153,8 @@ def _street_variants(street: str, max_len: int = 20) -> List[str]:
         repl = STREET_SUFFIX_MAP.get(last)
         if repl:
             variants.append(" ".join(tokens[:-1] + [repl]))
+        if tokens[0] in {"ir", "dr"} and len(tokens) > 1:
+            variants.append(" ".join(tokens[1:]))
     if len(cleaned) > max_len:
         variants.append(cleaned[:max_len])
     if len(cleaned) > 18:

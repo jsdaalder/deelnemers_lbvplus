@@ -28,6 +28,8 @@ WOONPLAATSEN_CSV = PIPE_ROOT / "data" / "raw" / "woonplaatsen.csv"
 RVO_OVERVIEW_XLSX = PIPE_ROOT / "data" / "raw" / "rvo_overview_lbv_lbvplus.xlsx"
 DEFAULT_MASTER = PROCESSED_DIR / "master_participants.csv"
 DATA_YEAR = 2021
+RVO_TOTAL_PARTICIPANTS = 988
+CBS_ANIMALS = PIPE_ROOT / "data" / "raw" / "cbs_dieraantallen.csv"
 
 # Central chart filenames
 CHART_FILES = {
@@ -43,6 +45,12 @@ CHART_FILES = {
     "province_known_vs_rvo": "10_chart_known_vs_rvo.png",
     "province_definitive_vs_rvo": "11_chart_definitive_vs_rvo.png",
     "receipt_elapsed": "12_chart_receipt_elapsed.png",
+    "stage_vs_voorschot": "13_chart_stage_vs_voorschot.png",
+    "buyout_share_known": "14_chart_buyout_share_known.png",
+    "companies_by_category_known": "15_chart_companies_by_category_known.png",
+    "receipt_vs_draft_def": "16_chart_receipt_vs_draft_def.png",
+    "buyout_share_cbs": "17_chart_buyout_share_cbs.png",
+    "draft_def_by_province": "18_chart_draft_def_by_province.png",
     "overview": "chart_all.png",
 }
 ALL_CHART_FILENAMES = set(CHART_FILES.values())
@@ -107,6 +115,7 @@ STYLE: Dict[str, object] = {
     "color_fosfaat": "#8ACB88",
     "color_rel": "#B39DDB",
     "color_unlinked": "#B0B0B0",
+    "color_no_process": "#D9D9D9",
     "color_permit_kvk": "#6FA8DC",
     "text_color": "#222222",
     "subtitle_color": "#444444",
@@ -758,17 +767,34 @@ def compute_avg_animals_per_farm(
 
 
 def compute_permit_stage_links(df: pd.DataFrame) -> pd.DataFrame:
-    """Return per-stage totals of unique permit farms and how many have a rel link."""
-    permit_df = df[df["source"] == "permit"].copy()
-    permit_df = filter_to_year(permit_df, DATA_YEAR)
+    """Return per-stage totals of unique permit farms and how many have a rel link.
+
+    Uses the latest known stage per farm (based on Datum_latest, then stage rank).
+    """
+    latest_per_farm = select_latest_permit_stage(df, DATA_YEAR)
     stages = ["receipt_of_application", "draft_decision", "definitive_decision"]
     rows = []
     for stage in stages:
-        stage_farms = permit_df[permit_df["stage_latest_llm"] == stage]
+        stage_farms = latest_per_farm[latest_per_farm["stage_latest_llm"] == stage]
         total = stage_farms["farm_id"].nunique()
         linked = stage_farms.loc[stage_farms["rel_anoniem"].notna(), "farm_id"].nunique()
         rows.append({"stage": stage, "total": total, "linked": linked, "unlinked": total - linked})
     return pd.DataFrame(rows).set_index("stage")
+
+
+def select_latest_permit_stage(df: pd.DataFrame, year: int) -> pd.DataFrame:
+    """Return one latest permit row per farm for the given year."""
+    permit_df = df[df["source"] == "permit"].copy()
+    permit_df = filter_to_year(permit_df, year)
+    if permit_df.empty:
+        return permit_df
+    permit_df["parsed_date"] = permit_df["Datum_latest"].apply(parse_day_month_year)
+    stage_rank = {"receipt_of_application": 0, "draft_decision": 1, "definitive_decision": 2}
+    permit_df["stage_rank"] = permit_df["stage_latest_llm"].map(stage_rank).fillna(-1).astype(int)
+    min_date = pd.Timestamp.min
+    permit_df["parsed_date"] = permit_df["parsed_date"].fillna(min_date)
+    permit_df = permit_df.sort_values(["farm_id", "parsed_date", "stage_rank"])
+    return permit_df.groupby("farm_id", as_index=False).tail(1)
 
 
 def compute_buyout_share(master_df: pd.DataFrame, raw_animals_path: Path, year: int) -> pd.DataFrame:
@@ -807,6 +833,78 @@ def compute_buyout_share(master_df: pd.DataFrame, raw_animals_path: Path, year: 
     combined["remaining_pct"] = (100 - combined["buyout_pct"]).clip(lower=0)
     combined.attrs["buyout_farms"] = farm_with_animals
     return combined.astype({"totaal": int, "buyout": int})
+
+
+def compute_buyout_share_for_farms(
+    master_df: pd.DataFrame, raw_animals_path: Path, year: int, farm_ids: set
+) -> pd.DataFrame:
+    """Return per-category totals and buyout totals for a specific farm subset."""
+    farm_rel_map = build_farm_rel_map(master_df)
+    raw = pd.read_csv(raw_animals_path)
+    raw = raw[raw["gem_jaar"] == year]
+    raw["rav_code"] = raw["rav_code"].astype(str).str.upper()
+    raw["gem_aantal_dieren"] = pd.to_numeric(raw["gem_aantal_dieren"], errors="coerce")
+    raw["category"] = raw["rav_code"].map(map_rav_category)
+    raw = raw.dropna(subset=["gem_aantal_dieren"])
+    raw = raw[raw["category"] != ""]
+    raw = raw[raw["gem_aantal_dieren"] > 0]
+
+    categories = ["kalkoenen", "kippen", "rundvee (excl. kalveren)", "vleeskalveren", "varkens", "geiten"]
+    combined = pd.DataFrame(index=categories)
+    combined["totaal"] = raw.groupby("category")["gem_aantal_dieren"].sum().reindex(categories, fill_value=0)
+
+    farm_with_animals = 0
+    farm_category_totals: Dict[str, float] = {cat: 0.0 for cat in categories}
+    for fid in farm_ids:
+        rels = farm_rel_map.get(fid)
+        if not rels:
+            continue
+        farm_subset = raw[raw["rel_anoniem"].isin(rels)]
+        if farm_subset.empty:
+            continue
+        farm_with_animals += 1
+        sums = farm_subset.groupby("category")["gem_aantal_dieren"].sum()
+        for cat, val in sums.items():
+            farm_category_totals[cat] = farm_category_totals.get(cat, 0.0) + float(val)
+
+    combined["buyout"] = pd.Series(farm_category_totals).reindex(categories, fill_value=0)
+    combined["buyout_pct"] = (combined["buyout"] / combined["totaal"].replace(0, pd.NA) * 100).fillna(0)
+    combined["remaining_pct"] = (100 - combined["buyout_pct"]).clip(lower=0)
+    combined.attrs["buyout_farms"] = farm_with_animals
+    return combined.astype({"totaal": int, "buyout": int})
+
+
+def load_cbs_totals(cbs_path: Path) -> dict[str, int]:
+    """Load CBS totals per category (with poultry grouped into 'kippen')."""
+    if not cbs_path.exists():
+        return {}
+    df = pd.read_csv(cbs_path)
+    label_col = df.columns[0]
+    total_col = df.columns[2]
+    totals: dict[str, int] = {}
+    for _, row in df.iterrows():
+        label = str(row.get(label_col, "")).strip()
+        value = row.get(total_col)
+        if not label or label == "nan":
+            continue
+        try:
+            total = int(float(str(value).strip()))
+        except ValueError:
+            continue
+        if label == "Graasdieren|Aantal dieren|Rundvee|Rundvee, totaal":
+            totals["rundvee_totaal"] = total
+        elif label == "Graasdieren|Aantal dieren|Geiten|Geiten, totaal":
+            totals["geiten"] = total
+        elif label == "Hokdieren|Aantal dieren|Varkens|Varkens, totaal":
+            totals["varkens"] = total
+        elif label == "Hokdieren|Aantal dieren|Kalkoenen":
+            totals["kalkoenen"] = total
+        elif label in {
+            "Hokdieren|Aantal dieren|Kippen|Kippen, totaal",
+            "Hokdieren|Aantal dieren|Overig pluimvee",
+        }:
+            totals["kippen"] = totals.get("kippen", 0) + total
+    return totals
 
 
 def compute_ftm_linked_animals(
@@ -1099,7 +1197,14 @@ def plot_chart3_animals_by_category(
     plt.close(fig)
 
 
-def plot_chart4_companies_by_category(counts: pd.Series, total_rels: int, output_path: Path) -> None:
+def plot_chart4_companies_by_category(
+    counts: pd.Series,
+    total_rels: int,
+    output_path: Path,
+    title_override: str | None = None,
+    subtitle_extra: str | None = None,
+    subtitle_base: str | None = None,
+) -> None:
     """Bar chart showing company counts per animal category (with mixed)."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1109,10 +1214,72 @@ def plot_chart4_companies_by_category(counts: pd.Series, total_rels: int, output
     fig, ax = plt.subplots(figsize=STYLE["figsize"])
     bars = ax.bar(categories, values, color=str(STYLE["color_permit"]))
     ax.set_ylabel("Aantal bedrijven")
-    ax.set_title(
-        wrap_title(
+    if title_override:
+        title = title_override
+    else:
+        title = (
             f"Chart 4: Deze {sum(values):,}".replace(",", ".")
             + " bedrijven zijn voornamelijk varkenshouderijen en melkveehouderijen"
+        )
+    ax.set_title(wrap_title(title), fontsize=13, pad=float(STYLE["title_pad"]))
+    ax.tick_params(axis="x", rotation=25)
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+
+    annotate_bar_tops(ax, bars, values, use_log=False)
+
+    fig.tight_layout()
+    subtitle = subtitle_base or "Mixed: >1 diercategorie met elk meer dan 50 dieren; anders neemt het bedrijf de grootste categorie."
+    if subtitle_extra:
+        subtitle = subtitle + f"\n{subtitle_extra}"
+    add_subtitle(fig, subtitle)
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_chart16_receipt_vs_draft_def(
+    counts: dict[str, int],
+    output_path: Path,
+) -> None:
+    """Bar chart comparing receipt-only farms vs draft/definitive farms."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    labels = list(counts.keys())
+    values = [int(counts[label]) for label in labels]
+
+    fig, ax = plt.subplots(figsize=STYLE["figsize"])
+    bars = ax.bar(labels, values, color=str(STYLE["color_permit"]))
+    ax.set_ylabel("Aantal bedrijven")
+    ax.set_title(
+        wrap_title(
+            f"Chart 16: Ontvangst vs ontwerp/definitief ({sum(values):,} bedrijven)".replace(",", ".")
+        ),
+        fontsize=13,
+        pad=float(STYLE["title_pad"]),
+    )
+    ax.tick_params(axis="x", rotation=10)
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+
+    annotate_bar_tops(ax, bars, values, use_log=False)
+
+    fig.tight_layout()
+    add_subtitle(fig, SUBTITLE_TEXT)
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_chart18_draft_def_by_province(counts: pd.Series, output_path: Path) -> None:
+    """Bar chart of latest-stage draft/definitive farms per province."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    provinces = list(counts.index)
+    values = [int(v) for v in counts.values]
+
+    fig, ax = plt.subplots(figsize=STYLE["figsize"])
+    bars = ax.bar(provinces, values, color=str(STYLE["color_permit"]))
+    ax.set_ylabel("Aantal bedrijven")
+    ax.set_title(
+        wrap_title(
+            "Chart 18: Ontwerp- of definitief besluit (laatste status) per provincie"
         ),
         fontsize=13,
         pad=float(STYLE["title_pad"]),
@@ -1123,10 +1290,7 @@ def plot_chart4_companies_by_category(counts: pd.Series, total_rels: int, output
     annotate_bar_tops(ax, bars, values, use_log=False)
 
     fig.tight_layout()
-    add_subtitle(
-        fig,
-        "Mixed: >1 diercategorie met elk meer dan 50 dieren; anders neemt het bedrijf de grootste categorie.",
-    )
+    add_subtitle(fig, "Bron: RVO en officielebekendmakingen.nl.")
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -1199,7 +1363,13 @@ def plot_chart5_avg_animals(
     plt.close(fig)
 
 
-def plot_chart4_permit_stages(stage_df: pd.DataFrame, output_path: Path) -> None:
+def plot_chart4_permit_stages(
+    stage_df: pd.DataFrame,
+    output_path: Path,
+    total_participants: int | None = None,
+    subtitle_extra: str | None = None,
+    subtitle_base: str | None = None,
+) -> None:
     """Stacked bar for permit stages with linked vs unlinked rel_anoniem."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1212,11 +1382,31 @@ def plot_chart4_permit_stages(stage_df: pd.DataFrame, output_path: Path) -> None
     linked = [int(stage_df.at[key, "linked"]) for key, _ in order]
     unlinked = [int(stage_df.at[key, "unlinked"]) for key, _ in order]
     totals = [l + u for l, u in zip(linked, unlinked)]
+    not_in_process = None
+    if total_participants is not None:
+        not_in_process = max(int(total_participants) - sum(totals), 0)
+        labels = ["Nog geen intrekkingsproces"] + labels
 
     fig, ax = plt.subplots(figsize=STYLE["figsize"])
-    bars_linked = ax.bar(labels, linked, label="Dieraantallen achterhaald", color=str(STYLE["color_permit"]))
+    positions = list(range(len(labels)))
+    stage_positions = positions[1:] if not_in_process is not None else positions
+    bars_no_process = None
+    if not_in_process is not None:
+        bars_no_process = ax.bar(
+            [positions[0]],
+            [not_in_process],
+            label="Nog geen intrekkingsproces",
+            color=str(STYLE["color_no_process"]),
+            edgecolor=str(STYLE["text_color"]),
+        )
+    bars_linked = ax.bar(
+        stage_positions,
+        linked,
+        label="Dieraantallen achterhaald",
+        color=str(STYLE["color_permit"]),
+    )
     bars_unlinked = ax.bar(
-        labels,
+        stage_positions,
         unlinked,
         bottom=linked,
         label="Dieraantallen niet achterhaald",
@@ -1225,32 +1415,85 @@ def plot_chart4_permit_stages(stage_df: pd.DataFrame, output_path: Path) -> None
 
     ax.set_ylabel("Aantal unieke bedrijven")
     if totals:
-        max_height = max(totals)
+        max_height = max(totals + ([not_in_process] if not_in_process is not None else []))
         pad_ratio = float(STYLE["bar_pad_ratio"])
         ax.set_ylim(0, max_height * (1 + pad_ratio))
     total_farms = sum(totals)
     definitive_total = stage_df.at["definitive_decision", "total"] if "definitive_decision" in stage_df.index else 0
-    pct_def = 0 if total_farms == 0 else definitive_total / total_farms * 100
+    total_participants = int(total_participants or total_farms)
+    pct_def = 0 if total_participants == 0 else definitive_total / total_participants * 100
     title = (
-        "Chart 7: Van de "
-        + f"{total_farms:,}".replace(",", ".")
-        + " bedrijven die in het proces zijn de vergunning in te trekken, heeft nog maar "
+        "Chart 7: Van alle "
+        + f"{total_participants:,}".replace(",", ".")
+        + " deelnemers, heeft nog maar "
         + f"{pct_def:.1f}%"
-        + " een definitief besluit gekregen"
+        + " de vergunning definitief in laten trekken"
     )
     ax.set_title(wrap_title(title), fontsize=13, pad=float(STYLE["title_pad"]))
     ax.grid(axis="y", linestyle="--", alpha=0.3)
+    ax.set_xticks(positions)
+    ax.set_xticklabels(labels)
     ax.legend()
 
     # Show counts above each segment (avoids overlap even for small bars)
     positions = {}
+    if bars_no_process is not None:
+        annotate_bar_tops(
+            ax,
+            bars_no_process,
+            [not_in_process],
+            use_log=False,
+            last_positions=positions,
+            labels=[str(not_in_process)],
+        )
     annotate_bar_tops(ax, bars_linked, linked, use_log=False, last_positions=positions, labels=[str(v) for v in linked])
     annotate_bar_tops(
         ax, bars_unlinked, unlinked, use_log=False, last_positions=positions, labels=[str(v) for v in unlinked]
     )
 
     fig.tight_layout()
-    add_subtitle(fig, SUBTITLE_TEXT)
+    subtitle = subtitle_base or SUBTITLE_TEXT
+    if subtitle_extra:
+        subtitle = subtitle + f"\n{subtitle_extra}"
+    add_subtitle(fig, subtitle)
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_chart13_stage_vs_voorschot(stage_counts: pd.Series, output_path: Path) -> None:
+    """Bar chart: total draft+definitive vs those with non-zero animal counts."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    draft_count = int(stage_counts.get("draft_decision", 0))
+    definitive_count = int(stage_counts.get("definitive_decision", 0))
+    nonzero_count = int(stage_counts.get("nonzero_animals", 0))
+    combined = draft_count + definitive_count
+
+    labels = ["Ontwerp/definitief (totaal)", "Ontwerp/definitief met dieren (>0)"]
+    values = [combined, nonzero_count]
+
+    fig, ax = plt.subplots(figsize=STYLE["figsize"])
+    bars = ax.bar(labels, values, color=str(STYLE["color_permit"]))
+    ax.set_ylabel("Aantal bedrijven")
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    ax.tick_params(axis="x", rotation=10)
+    annotate_bar_tops(ax, bars, values, use_log=False)
+
+    title = (
+        "Chart 13: Van de "
+        + f"{combined:,}".replace(",", ".")
+        + " bedrijven met een ontwerp- of definitief besluit, zijn er "
+        + f"{nonzero_count:,}".replace(",", ".")
+        + " met niet-nul dieraantallen"
+    )
+    ax.set_title(wrap_title(title), fontsize=13, pad=float(STYLE["title_pad"]))
+    fig.tight_layout()
+    subtitle = (
+        SUBTITLE_TEXT
+        + "\\nOntwerpbesluit betekent dat het ontwerp ter inzage ligt; definitief besluit betekent dat het besluit is genomen."
+        + f" Ontwerpbesluit: {draft_count}, definitief besluit: {definitive_count}."
+    )
+    add_subtitle(fig, subtitle)
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -1313,7 +1556,13 @@ def plot_chart4_stage_animals(
     plt.close(fig)
 
 
-def plot_chart5_buyout_share(buyout_df: pd.DataFrame, output_path: Path) -> None:
+def plot_chart5_buyout_share(
+    buyout_df: pd.DataFrame,
+    output_path: Path,
+    title_override: str | None = None,
+    subtitle_extra: str | None = None,
+    subtitle_base: str | None = None,
+) -> None:
     """Per-category pies showing buyout vs remaining animals."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1351,17 +1600,20 @@ def plot_chart5_buyout_share(buyout_df: pd.DataFrame, output_path: Path) -> None
     for ax in axes[len(categories) :]:
         ax.axis("off")
 
-    fig.suptitle(
-        wrap_title(
+    if title_override:
+        title = title_override
+    else:
+        title = (
             f"Chart 6: Als alle {total_farms} bedrijven zich laten uitkopen, verdwijnen er "
             + f"{total_buyout:,}".replace(",", ".")
             + " dieren"
-        ),
-        fontsize=13,
-        y=0.98,
-    )
+        )
+    fig.suptitle(wrap_title(title), fontsize=13, y=0.98)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
-    add_subtitle(fig, SUBTITLE_TEXT)
+    subtitle = subtitle_base or SUBTITLE_TEXT
+    if subtitle_extra:
+        subtitle = subtitle + f"\n{subtitle_extra}"
+    add_subtitle(fig, subtitle)
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -1468,6 +1720,12 @@ def combine_charts(charts_dir: Path, output_name: str = "chart_all.png") -> Path
         "animals_by_stage",
         "definitive_progress",
         "receipt_elapsed",
+        "stage_vs_voorschot",
+        "buyout_share_known",
+        "companies_by_category_known",
+        "receipt_vs_draft_def",
+        "buyout_share_cbs",
+        "draft_def_by_province",
     ]
     images = []
     for key in order_keys:
@@ -1549,6 +1807,80 @@ def generate_charts(
     receipt_days, receipt_stats = compute_receipt_elapsed_days(df_year, datetime.date.today())
     buyout_df = compute_buyout_share(df_match, FTM_RAW_ANIMALS, DATA_YEAR)
 
+    # Chart 13: draft/definitive vs voorschot received (exclude receipt-only farms).
+    permit_farms = select_latest_permit_stage(df_match, DATA_YEAR)
+    permit_farms["Province"] = permit_farms.get("Province").fillna("Onbekend")
+    known_with_animals = permit_farms[permit_farms["has_animals"]].copy()
+    nonzero_animals_count = int(
+        permit_farms[
+            permit_farms["stage_latest_llm"].isin({"draft_decision", "definitive_decision"})
+            & (permit_farms["has_animals"])
+        ]["farm_id"].nunique()
+    )
+    stage_vs_voorschot_counts = {
+        "draft_decision": int(stage_link_df.at["draft_decision", "total"])
+        if "draft_decision" in stage_link_df.index
+        else 0,
+        "definitive_decision": int(stage_link_df.at["definitive_decision", "total"])
+        if "definitive_decision" in stage_link_df.index
+        else 0,
+        "nonzero_animals": nonzero_animals_count,
+    }
+    chart14_df = known_with_animals[known_with_animals["stage_latest_llm"].isin({"draft_decision", "definitive_decision"})]
+    chart14_farm_ids = set(chart14_df["farm_id"].dropna().unique())
+    receipt_only_df = permit_farms[permit_farms["stage_latest_llm"] == "receipt_of_application"].copy()
+    receipt_only_farm_ids = set(receipt_only_df["farm_id"].dropna().unique())
+    chart14_zero_animals = int(
+        permit_farms[
+            permit_farms["stage_latest_llm"].isin({"draft_decision", "definitive_decision"})
+            & (permit_farms["rel_anoniem"].notna())
+            & (~permit_farms["has_animals"])
+        ]["farm_id"].nunique()
+    )
+    buyout_known_df = compute_buyout_share_for_farms(df_match, FTM_RAW_ANIMALS, DATA_YEAR, chart14_farm_ids)
+    cbs_totals = load_cbs_totals(CBS_ANIMALS)
+    buyout_cbs_df = buyout_known_df.copy()
+    rundvee_total = int(cbs_totals.get("rundvee_totaal", 0))
+    buyout_cbs_combined = pd.DataFrame(
+        index=["kalkoenen", "kippen", "rundvee (incl. kalveren)", "varkens", "geiten"]
+    )
+    buyout_kalkoenen = int(buyout_cbs_df.at["kalkoenen", "buyout"]) if "kalkoenen" in buyout_cbs_df.index else 0
+    buyout_kippen = int(buyout_cbs_df.at["kippen", "buyout"]) if "kippen" in buyout_cbs_df.index else 0
+    buyout_rundvee = int(buyout_cbs_df.at["rundvee (excl. kalveren)", "buyout"]) if "rundvee (excl. kalveren)" in buyout_cbs_df.index else 0
+    buyout_vleeskalveren = int(buyout_cbs_df.at["vleeskalveren", "buyout"]) if "vleeskalveren" in buyout_cbs_df.index else 0
+    buyout_varkens = int(buyout_cbs_df.at["varkens", "buyout"]) if "varkens" in buyout_cbs_df.index else 0
+    buyout_geiten = int(buyout_cbs_df.at["geiten", "buyout"]) if "geiten" in buyout_cbs_df.index else 0
+    buyout_cbs_combined["buyout"] = [
+        buyout_kalkoenen,
+        buyout_kippen,
+        buyout_rundvee + buyout_vleeskalveren,
+        buyout_varkens,
+        buyout_geiten,
+    ]
+    buyout_cbs_combined["totaal"] = [
+        int(cbs_totals.get("kalkoenen", 0)),
+        int(cbs_totals.get("kippen", 0)),
+        rundvee_total,
+        int(cbs_totals.get("varkens", 0)),
+        int(cbs_totals.get("geiten", 0)),
+    ]
+    buyout_cbs_combined["buyout_pct"] = (
+        buyout_cbs_combined["buyout"] / buyout_cbs_combined["totaal"].replace(0, pd.NA) * 100
+    ).fillna(0)
+    buyout_cbs_combined["remaining_pct"] = (100 - buyout_cbs_combined["buyout_pct"]).clip(lower=0)
+    buyout_cbs_combined.attrs["buyout_farms"] = int(buyout_known_df.attrs.get("buyout_farms", 0))
+    company_counts_known, company_total_known = compute_company_categories(
+        df_match[df_match["farm_id"].isin(chart14_farm_ids)],
+        FTM_RAW_ANIMALS,
+        DATA_YEAR,
+    )
+    draft_def_by_province = (
+        permit_farms[permit_farms["stage_latest_llm"].isin({"draft_decision", "definitive_decision"})]
+        .groupby("Province")["farm_id"]
+        .nunique()
+        .sort_values(ascending=False)
+    )
+
     animals_def = int(stage_counts["definitive_decision"].sum())
     animals_total = int(buyout_df["buyout"].sum())
     participants_def = int(stage_link_df.at["definitive_decision", "total"]) if "definitive_decision" in stage_link_df.index else 0
@@ -1620,7 +1952,10 @@ def generate_charts(
             "buyout": buyout_df.reset_index().rename(columns={"index": "category"}).to_dict(orient="records"),
             "buyout_farms": int(buyout_df.attrs.get("buyout_farms", 0)),
         },
-        "chart7": {"stages": stage_link_df.reset_index().rename(columns={"index": "stage"}).to_dict(orient="records")},
+        "chart7": {
+            "stages": stage_link_df.reset_index().rename(columns={"index": "stage"}).to_dict(orient="records"),
+            "total_participants": int(RVO_TOTAL_PARTICIPANTS),
+        },
         "chart8": {
             "stage_animals": stage_counts.reset_index().rename(columns={"index": "category"}).to_dict(orient="records"),
             "stage_farms": int(stage_farms),
@@ -1634,6 +1969,27 @@ def generate_charts(
             "pct_participants": float(pct_participants),
             "pct_animals": float(pct_animals),
         },
+        "chart13": {"stage_vs_voorschot": stage_vs_voorschot_counts},
+        "chart14": {
+            "buyout_known": buyout_known_df.reset_index().rename(columns={"index": "category"}).to_dict(orient="records"),
+            "buyout_farms": int(buyout_known_df.attrs.get("buyout_farms", 0)),
+            "zero_animals": int(chart14_zero_animals),
+        },
+        "chart15": {
+            "counts": {k: int(v) for k, v in company_counts_known.items()},
+            "total_companies": int(company_total_known),
+        },
+        "chart16": {
+            "counts": {
+                "Ontvangst (alleen)": int(len(receipt_only_farm_ids)),
+                "Ontwerp/definitief": int(len(chart14_farm_ids)),
+            }
+        },
+        "chart17": {
+            "buyout_cbs": buyout_cbs_combined.reset_index().rename(columns={"index": "category"}).to_dict(orient="records"),
+            "buyout_farms": int(buyout_cbs_combined.attrs.get("buyout_farms", 0)),
+        },
+        "chart18": {"counts": {k: int(v) for k, v in draft_def_by_province.items()}},
         "chart12": {
             "receipt_days": receipt_days.tolist(),
             "receipt_stats": receipt_stats,
@@ -1714,9 +2070,17 @@ def generate_charts(
     )
 
     c7 = chart_data["chart7"]
+    zero_animals_known = int(chart_data.get("chart14", {}).get("zero_animals", 0))
     stage_link_df = pd.DataFrame(c7["stages"]).set_index("stage")
     chart4_path = charts_dir / CHART_FILES["permit_stages"]
-    plot_chart4_permit_stages(stage_link_df, chart4_path)
+    subtitle_zero = f"{zero_animals_known} gelinkte ontwerp/definitieve bedrijven hebben 0 dieren in FTM {DATA_YEAR}."
+    plot_chart4_permit_stages(
+        stage_link_df,
+        chart4_path,
+        total_participants=int(c7.get("total_participants", 0)),
+        subtitle_extra=subtitle_zero,
+        subtitle_base="Bron: RVO en officielebekendmakingen.nl.",
+    )
     print(
         f"Saved permit stage chart to {chart4_path} "
         f"(stages: {stage_link_df.index.tolist()})."
@@ -1748,6 +2112,100 @@ def generate_charts(
         f"Saved definitive progress chart to {chart8_path} "
         f"(participants: {c9['participants_def']}/{c9['participants_total']}, animals: {c9['animals_def']}/{c9['animals_total']})."
     )
+
+    c13 = chart_data.get("chart13", {})
+    stage_vs_voorschot = pd.Series(c13.get("stage_vs_voorschot", {}))
+    chart13_path = charts_dir / CHART_FILES["stage_vs_voorschot"]
+    plot_chart13_stage_vs_voorschot(stage_vs_voorschot, chart13_path)
+    print(f"Saved stage vs voorschot chart to {chart13_path}.")
+
+    c14 = chart_data.get("chart14", {})
+    buyout_known_df = pd.DataFrame(c14.get("buyout_known", [])).set_index("category")
+    buyout_known_df.attrs["buyout_farms"] = int(c14.get("buyout_farms", 0))
+    zero_animals_known = int(c14.get("zero_animals", 0))
+    chart14_path = charts_dir / CHART_FILES["buyout_share_known"]
+    total_buyout_known = int(buyout_known_df["buyout"].sum()) if not buyout_known_df.empty else 0
+    total_farms_known = int(buyout_known_df.attrs.get("buyout_farms", 0))
+    total_buyout_million = total_buyout_known / 1_000_000
+    title_known = (
+        "Van "
+        + f"{total_farms_known} boeren die hun vergunning in hebben laten trekken, konden we de dieraantallen achterhalen. Zij hielden "
+        + f"{total_buyout_million:.1f}".replace(".", ",")
+        + " miljoen dieren"
+    )
+    subtitle_known = f"We vonden ook {zero_animals_known} boeren met 0 dieren in de FTM-gegevens."
+    plot_chart5_buyout_share(
+        buyout_known_df,
+        chart14_path,
+        title_override=title_known,
+        subtitle_extra=subtitle_known,
+    )
+    print(
+        f"Saved buyout share chart (known subset) to {chart14_path} "
+        f"(categories: {buyout_known_df.index.tolist()}, total_buyout_animals: {int(buyout_known_df['buyout'].sum())})."
+    )
+
+    c15 = chart_data.get("chart15", {})
+    company_counts_known = pd.Series(c15.get("counts", {}))
+    company_total_known = int(c15.get("total_companies", 0))
+    chart15_path = charts_dir / CHART_FILES["companies_by_category_known"]
+    title_known_companies = (
+        f"Chart 15: Deze {company_total_known:,}".replace(",", ".")
+        + " bedrijven zijn voornamelijk varkenshouderijen en melkveehouderijen"
+    )
+    subtitle_known_companies = (
+        "Mixed: >1 diercategorie met elk meer dan 50 dieren; anders neemt het bedrijf de grootste categorie."
+        "\nBron: RVO en officielebekendmakingen.nl."
+    )
+    plot_chart4_companies_by_category(
+        company_counts_known,
+        company_total_known,
+        chart15_path,
+        title_override=title_known_companies,
+        subtitle_extra=subtitle_zero,
+        subtitle_base=subtitle_known_companies,
+    )
+    print(
+        f"Saved company category bar chart (known subset) to {chart15_path} "
+        f"(companies: {company_total_known}, categories: {company_counts_known.index.tolist()})."
+    )
+
+    c16 = chart_data.get("chart16", {})
+    chart16_counts = {k: int(v) for k, v in c16.get("counts", {}).items()}
+    chart16_path = charts_dir / CHART_FILES["receipt_vs_draft_def"]
+    plot_chart16_receipt_vs_draft_def(chart16_counts, chart16_path)
+    print(f"Saved receipt vs draft/definitive chart to {chart16_path}.")
+
+    c17 = chart_data.get("chart17", {})
+    buyout_cbs_df = pd.DataFrame(c17.get("buyout_cbs", [])).set_index("category")
+    buyout_cbs_df.attrs["buyout_farms"] = int(c17.get("buyout_farms", 0))
+    chart17_path = charts_dir / CHART_FILES["buyout_share_cbs"]
+    total_buyout_cbs = int(buyout_cbs_df["buyout"].sum()) if not buyout_cbs_df.empty else 0
+    total_farms_cbs = int(buyout_cbs_df.attrs.get("buyout_farms", 0))
+    total_buyout_cbs_million = total_buyout_cbs / 1_000_000
+    title_cbs = (
+        "Chart 17: "
+        + f"{total_farms_cbs} bedrijven, ".replace(",", ".")
+        + f"{total_buyout_cbs_million:.1f}".replace(".", ",")
+        + " miljoen dieren (CBS totaal)"
+    )
+    plot_chart5_buyout_share(
+        buyout_cbs_df,
+        chart17_path,
+        title_override=title_cbs,
+        subtitle_extra=subtitle_zero,
+        subtitle_base="Bron: RVO, officielebekendmakingen.nl en CBS.",
+    )
+    print(
+        f"Saved buyout share chart (CBS totals) to {chart17_path} "
+        f"(categories: {buyout_cbs_df.index.tolist()}, total_buyout_animals: {int(buyout_cbs_df['buyout'].sum())})."
+    )
+
+    c18 = chart_data.get("chart18", {})
+    draft_def_counts = pd.Series(c18.get("counts", {}))
+    chart18_path = charts_dir / CHART_FILES["draft_def_by_province"]
+    plot_chart18_draft_def_by_province(draft_def_counts, chart18_path)
+    print(f"Saved draft/def by province chart to {chart18_path}.")
 
     rvo_comp_loaded = pd.DataFrame(chart_data.get("rvo_comparison", []))
     rvo_def_chart = charts_dir / CHART_FILES["province_definitive_vs_rvo"]

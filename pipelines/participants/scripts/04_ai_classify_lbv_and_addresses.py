@@ -123,12 +123,18 @@ Je moet twee dingen doen:
          "aanvraag ontvangen", "aanvraagdatum", "In dit stadium is het niet mogelijk uw mening te geven".
          Negeer toekomstzinnen zoals "er zal later een ontwerpbesluit worden opgemaakt" als er nu alleen een ontvangstmelding staat.
        - "draft_decision"          → ontwerpbesluit / terinzagelegging / zienswijzen mogelijk (woorden zoals
-         "ontwerpbesluit", "ontwerpbeschikking", "zienswijzen indienen", "het voornemen hebben").
+         "ontwerpbesluit", "ontwerpbeschikking", "zienswijzen indienen", "het voornemen hebben",
+         of "het voornemen om de vergunning te verlenen".
          Als zowel "hebben verleend/ingetrokken/verzenddatum besluit" als "voornemen/ontwerp/ter inzage/zienswijzen"
          in dezelfde publicatie staan, kies draft_decision (ontwerpfase gaat voor).
+         Als expliciet "ontwerpbesluit" genoemd wordt in de huidige procedure (bijv. "het ontwerpbesluit ligt ter inzage"
+         of "wordt ter inzage gelegd"), kies altijd draft_decision, óók als er elders "verleend/ingetrokken",
+         "besluit" of "beroep" staat. Negeer verwijzingen naar verleden/toekomst zoals "heeft ter inzage gelegen"
+         of "zal ter inzage worden gelegd".
        - "definitive_decision"     → definitief besluit/beschikking: vergunning wordt verleend of ingetrokken,
          er kan beroep/bezwaar worden ingesteld, er staan zinnen als "Met dit besluit...", "Het besluit treedt in werking",
          of voltooid tegenwoordige tijd zonder "voornemen" (bijv. "hebben verleend", "hebben ingetrokken").
+         Als er staat "Het besluit is ten opzichte van het ontwerpbesluit gewijzigd", is dit definitief.
        - "intent_notice"           → een bekendmaking van een voornemen, zonder dat er al een ontwerp- of definitief besluit ligt.
        - "other"                   → alles wat niet in bovenstaande categorieën past.
    - Let op:
@@ -375,6 +381,80 @@ def normalize_text_field(val: Any) -> str:
     if pd.isna(val):
         return ""
     return str(val)
+
+
+def has_current_ontwerpbesluit(text: str) -> bool:
+    """True when ontwerpbesluit is explicitly in current inzage context."""
+    if not text:
+        return False
+    cleaned = re.sub(r"\s+", " ", text.lower())
+    patterns = [
+        r"ontwerpbesluit.{0,200}(ligt|liggen|wordt|worden).{0,60}ter ?inzage",
+        r"ontwerpbesluit.{0,200}in ?te ?zien",
+    ]
+    for pat in patterns:
+        match = re.search(pat, cleaned)
+        if match:
+            window = cleaned[match.start():match.end()]
+            if re.search(r"\b(heeft|hebben|had|gehad|werd|werden|zal|zullen|zou|zouden)\b", window):
+                return False
+            return True
+    return False
+
+
+def has_current_ontwerpbesluit_any(text: str) -> bool:
+    """True when ontwerpbesluit appears in a current (non-past/future) context."""
+    if not text:
+        return False
+    cleaned = re.sub(r"\s+", " ", text.lower())
+    if "ontwerpbesluit" not in cleaned:
+        return False
+    # Exclude past/future context near ontwerpbesluit.
+    patterns = [
+        r"ontwerpbesluit.{0,80}(?:heeft|hebben|had|gehad|werd|werden|zal|zullen|zou|zouden)",
+        r"(?:heeft|hebben|had|gehad|werd|werden|zal|zullen|zou|zouden).{0,80}ontwerpbesluit",
+    ]
+    for pat in patterns:
+        if re.search(pat, cleaned):
+            return False
+    return True
+
+
+def has_definitive_after_ontwerp(text: str) -> bool:
+    """True when text explicitly states the definitive decision changed vs ontwerpbesluit."""
+    if not text:
+        return False
+    cleaned = re.sub(r"\s+", " ", text.lower())
+    patterns = [
+        r"besluit.{0,120}(?:ten opzichte van|t\.o\.v\.).{0,80}ontwerpbesluit.{0,80}gewijzigd",
+        r"besluit.{0,120}gewijzigd.{0,120}ontwerpbesluit",
+    ]
+    return any(re.search(pat, cleaned) for pat in patterns)
+
+
+def has_draft_voornemen(text: str) -> bool:
+    """True when text signals an intended draft decision (voornemen/ontwerpbeschikking)."""
+    if not text:
+        return False
+    cleaned = re.sub(r"\s+", " ", text.lower())
+    if "ontwerpbeschikking" in cleaned:
+        return True
+    if re.search(r"voornemen.{0,80}vergunning.{0,40}verlenen", cleaned):
+        return True
+    return False
+
+
+def apply_stage_overrides(stage: str, text: str) -> str:
+    """Apply deterministic overrides to stage based on key phrases."""
+    if has_definitive_after_ontwerp(text):
+        return "definitive_decision"
+    if stage != "receipt_of_application" and (
+        has_current_ontwerpbesluit(text)
+        or has_current_ontwerpbesluit_any(text)
+        or has_draft_voornemen(text)
+    ):
+        return "draft_decision"
+    return stage
 
 
 def combine_text_fields(html_text: str, pdf_text: str) -> str:
@@ -869,7 +949,7 @@ def main():
                     "other",
                 ):
                     st = "other"
-                df.at[idx, COL_STAGE] = st
+                df.at[idx, COL_STAGE] = apply_stage_overrides(st, combined_text)
                 # confidence
                 try:
                     df.at[idx, COL_LBV_CONF] = float(data.get("lbv_confidence", 0.0) or 0.0)
@@ -908,7 +988,7 @@ def main():
                 "other",
             ):
                 st = "other"
-            df.at[idx, COL_STAGE] = st
+            df.at[idx, COL_STAGE] = apply_stage_overrides(st, combined_text)
             df.at[idx, COL_LBV_CONF] = float(rb.get("lbv_confidence", 0.0) or 0.0)
             if not method_used:
                 method_used = "rules_only"

@@ -18,12 +18,17 @@ A public, end-to-end view of the LBV/LBV+ shutdown scheme. The repo scrapes perm
 - Working data (raw/processed CSVs) lives under each pipeline’s `data/` and stays git-ignored.
 - The export step writes `final_results/<date>/chart_all_<date>.png` and CSVs (`farms_permits_minfin_<date>.csv` and `_agg_...`). Commit only the charts; keep the CSVs local so others can regenerate them.
 
+## LLM validation status
+- All draft and definitive notices in the current corpus have been manually checked; other stages were not.
+- Historical accuracy on the manual set: 284/287 (98.96%) unique notices.
+
 ## Data sources (public)
 - Permit notices: scraped from https://www.officielebekendmakingen.nl/
 - MinFin voorschot dataset: https://data.overheid.nl/dataset/financile-instrumenten-2022#panel-resources
 - RVO actueel overzicht: https://www.rvo.nl/onderwerpen/lbv-plus-actueel
 - Fosfaatbeschikkingen: https://www.rijksoverheid.nl/documenten/publicaties/2023/09/19/tabel-gegevens-fosfaatbeschikkingen-bij-bob-woo-besluit-over-toekenning-fosfaatrechten-aan-agrarische-bedrijven
 - FTM dieraantallen (Woo gecombineerde opgaven): https://www.rijksoverheid.nl/documenten/woo-besluiten/2023/05/04/besluit-op-woo-verzoek-over-de-gecombineerde-opgaven-van-alle-agrarische-ondernemingen-in-nederland
+- CBS totale veestapel 2021: https://opendata.cbs.nl/#/CBS/nl/dataset/80780ned/table?dl=CD311
 - Woonplaatsen (CBS): https://www.cbs.nl/nl-nl/cijfers/detail/86097NED
 - RAV conversietabel diercategorieën: https://iplo.nl/regelgeving/regels-voor-activiteiten/dierenverblijven/systeembeschrijvingen-stallen/conversietabel-bijlage-rav-code/
 
