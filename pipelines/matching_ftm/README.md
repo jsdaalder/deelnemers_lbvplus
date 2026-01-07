@@ -45,10 +45,12 @@ End-to-end flow to link permit-rescinded and minfin buy-out farms to the nationa
    - Fosfaat/2015 prep (step 05 produces several `05_*` files):  
      - `python3 scripts/07_prepare_fosfaat_2015_linkages.py` → `05_FTM_2015_rundvee_dairy.csv`, `05_fosfaat_animals_2015.csv`, `05_fosfaat_rel_crosswalk.csv`
 
-7) **Master table + merge minfin**  
+7) **Master table**  
    - `python3 scripts/09_build_master_table.py`  
-   - `python3 scripts/09_merge_minfin_into_master.py`  *(if present; ensure numbering if you keep a merge step)*  
-   - Output: `data/processed/master_permits.csv` (includes all permits + minfin, animal counts when matched)
+   - Outputs:  
+     - `data/processed/master_participants.csv` (main combined table; stable IDs via `farm_id_new`)  
+     - `data/processed/master_permits.csv` (permit-only view)  
+     - `data/processed/master_voorschotten.csv` (minfin-only view)
 
 8) **Reporting (`pipelines/matching_ftm/analysis/ftm/`)**  
    - `python3 pipelines/matching_ftm/analysis/ftm/14_generate_charts.py` (charts to `pipelines/matching_ftm/analysis/ftm/charts/<YYYY_MM_DD>/`)  
@@ -56,7 +58,7 @@ End-to-end flow to link permit-rescinded and minfin buy-out farms to the nationa
 
 9) **Export final deliverables (`pipelines/matching_ftm/analysis/ftm/`)**  
    - `python3 pipelines/matching_ftm/analysis/ftm/13_export_final_results.py`  
-   - Copies chart overviews (PNG/PDF if present) and writes a slimmed `farms_permits_minfin_<date>.csv` (keeps key columns only) to `final_results/<YYYY_MM_DD>/` with the date tag in filenames.
+   - Copies chart overviews (PNG/PDF if present) and writes a slimmed CSV to `final_results/<YYYY_MM_DD>/` with the date tag in filenames.
 
 ## Notes on matching logic
 - Primary match is direct address-based (`normalized_address_key`) against `FTM_dieraantallen`.
