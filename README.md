@@ -20,6 +20,9 @@ A public, end-to-end view of the LBV/LBV+ shutdown scheme. The repo scrapes perm
 
 ## LLM validation status
 - All draft and definitive notices in the current corpus have been manually checked; other stages were not.
+- Current corpus: 568 unique URLs; 533 manually labeled (93.8% coverage).
+- Latest-stage draft/definitive notices: 356 URLs, all manually checked. Latest-stage receipt-only: 212 URLs, of which 177 are manually labeled.
+- Manual vs LLM agreement on those labeled URLs: 489/533 (94.2%). This is a rough indication for the 35 unlabeled URLs, not a guarantee.
 - Historical accuracy on the manual set: 284/287 (98.96%) unique notices.
 
 ## Data sources (public)
