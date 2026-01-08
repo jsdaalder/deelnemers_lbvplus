@@ -1267,15 +1267,23 @@ def plot_chart16_receipt_vs_draft_def(
     plt.close(fig)
 
 
-def plot_chart18_draft_def_by_province(counts: pd.Series, output_path: Path) -> None:
-    """Bar chart of latest-stage draft/definitive farms per province."""
+def plot_chart18_draft_def_by_province(counts: pd.DataFrame, output_path: Path) -> None:
+    """Stacked bar chart of latest-stage draft vs definitive farms per province."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     provinces = list(counts.index)
-    values = [int(v) for v in counts.values]
+    draft = [int(v) for v in counts.get("draft_decision", pd.Series(index=counts.index, data=0)).tolist()]
+    definitive = [int(v) for v in counts.get("definitive_decision", pd.Series(index=counts.index, data=0)).tolist()]
 
     fig, ax = plt.subplots(figsize=STYLE["figsize"])
-    bars = ax.bar(provinces, values, color=str(STYLE["color_permit"]))
+    bars_draft = ax.bar(provinces, draft, color=str(STYLE["color_permit"]), label="Ontwerpbesluit")
+    bars_def = ax.bar(
+        provinces,
+        definitive,
+        bottom=draft,
+        color=str(STYLE["color_minfin"]),
+        label="Definitief besluit",
+    )
     ax.set_ylabel("Aantal bedrijven")
     ax.set_title(
         wrap_title(
@@ -1286,8 +1294,10 @@ def plot_chart18_draft_def_by_province(counts: pd.Series, output_path: Path) -> 
     )
     ax.tick_params(axis="x", rotation=25)
     ax.grid(axis="y", linestyle="--", alpha=0.3)
+    ax.legend()
 
-    annotate_bar_tops(ax, bars, values, use_log=False)
+    totals = [d + df for d, df in zip(draft, definitive)]
+    annotate_bar_tops(ax, bars_def, totals, use_log=False)
 
     fig.tight_layout()
     add_subtitle(fig, "Bron: RVO en officielebekendmakingen.nl.")
@@ -1876,9 +1886,10 @@ def generate_charts(
     )
     draft_def_by_province = (
         permit_farms[permit_farms["stage_latest_llm"].isin({"draft_decision", "definitive_decision"})]
-        .groupby("Province")["farm_id"]
+        .groupby(["Province", "stage_latest_llm"])["farm_id"]
         .nunique()
-        .sort_values(ascending=False)
+        .unstack(fill_value=0)
+        .sort_values(by=["definitive_decision", "draft_decision"], ascending=False)
     )
 
     animals_def = int(stage_counts["definitive_decision"].sum())
@@ -1989,7 +2000,12 @@ def generate_charts(
             "buyout_cbs": buyout_cbs_combined.reset_index().rename(columns={"index": "category"}).to_dict(orient="records"),
             "buyout_farms": int(buyout_cbs_combined.attrs.get("buyout_farms", 0)),
         },
-        "chart18": {"counts": {k: int(v) for k, v in draft_def_by_province.items()}},
+        "chart18": {
+            "counts": {
+                prov: {stage: int(val) for stage, val in row.items()}
+                for prov, row in draft_def_by_province.iterrows()
+            }
+        },
         "chart12": {
             "receipt_days": receipt_days.tolist(),
             "receipt_stats": receipt_stats,
@@ -2202,7 +2218,7 @@ def generate_charts(
     )
 
     c18 = chart_data.get("chart18", {})
-    draft_def_counts = pd.Series(c18.get("counts", {}))
+    draft_def_counts = pd.DataFrame.from_dict(c18.get("counts", {}), orient="index")
     chart18_path = charts_dir / CHART_FILES["draft_def_by_province"]
     plot_chart18_draft_def_by_province(draft_def_counts, chart18_path)
     print(f"Saved draft/def by province chart to {chart18_path}.")
