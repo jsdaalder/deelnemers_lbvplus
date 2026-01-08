@@ -1298,6 +1298,19 @@ def plot_chart18_draft_def_by_province(counts: pd.DataFrame, output_path: Path) 
 
     totals = [d + df for d, df in zip(draft, definitive)]
     annotate_bar_tops(ax, bars_def, totals, use_log=False)
+    for x, d, df in zip(range(len(provinces)), draft, definitive):
+        if d > 0:
+            ax.text(x, d / 2, str(d), ha="center", va="center", fontsize=9, color=str(STYLE["text_color"]))
+        if df > 0:
+            ax.text(
+                x,
+                d + df / 2,
+                str(df),
+                ha="center",
+                va="center",
+                fontsize=9,
+                color=str(STYLE["text_color"]),
+            )
 
     fig.tight_layout()
     add_subtitle(fig, "Bron: RVO en officielebekendmakingen.nl.")
