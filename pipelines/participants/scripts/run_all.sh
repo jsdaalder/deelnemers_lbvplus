@@ -38,7 +38,84 @@ die() { printf "\\n[error] %s\\n" "$*" >&2; exit 1; }
 grep -q "OPENAI_API_KEY" "$REPO_ROOT/.env" || die "OPENAI_API_KEY not found in $REPO_ROOT/.env"
 mkdir -p data
 
+capture_counts() {
+  local outfile="$1"
+  "$PYTHON" - "$outfile" <<'PY'
+import json
+import sys
+import pandas as pd
+from pathlib import Path
+
+outfile = sys.argv[1]
+data_dir = Path("data")
+overheid = data_dir / "01_overheid_results.csv"
+participants = data_dir / "06_deelnemers_lbv_lbvplus.csv"
+
+payload = {
+    "unique_notices": 0,
+    "unique_farms": 0,
+    "latest_manual_labeled": 0,
+    "latest_manual_unlabeled": 0,
+}
+
+if overheid.exists():
+    df = pd.read_csv(overheid, dtype=str, keep_default_na=False)
+    if "URL" in df.columns:
+        payload["unique_notices"] = int(df["URL"].astype(str).str.strip().replace("", pd.NA).dropna().nunique())
+
+if participants.exists():
+    df = pd.read_csv(participants, dtype=str, keep_default_na=False)
+    if "farm_id_new" in df.columns:
+        farms = df.drop_duplicates(subset=["farm_id_new"]).copy()
+        payload["unique_farms"] = int(farms["farm_id_new"].astype(str).str.strip().replace("", pd.NA).dropna().nunique())
+        if "stage_latest_manual" in farms.columns:
+            labeled = farms["stage_latest_manual"].astype(str).str.strip() != ""
+            payload["latest_manual_labeled"] = int(labeled.sum())
+            payload["latest_manual_unlabeled"] = int((~labeled).sum())
+
+Path(outfile).write_text(json.dumps(payload), encoding="utf-8")
+PY
+}
+
+print_counts_summary() {
+  local before_json="$1"
+  local after_json="$2"
+  "$PYTHON" - "$before_json" "$after_json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+before = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+after = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+
+fields = [
+    ("unique_notices", "unique notices"),
+    ("unique_farms", "unique farms"),
+    ("latest_manual_labeled", "latest notices manually labeled"),
+    ("latest_manual_unlabeled", "latest notices missing manual label"),
+]
+
+print("")
+print("[summary] Participants pipeline")
+for key, label in fields:
+    b = int(before.get(key, 0))
+    a = int(after.get(key, 0))
+    diff = a - b
+    sign = f"+{diff}" if diff > 0 else str(diff)
+    print(f"[summary] {label}: {a} (before={b}, change={sign})")
+PY
+}
+
+TMP_DIR="data/runs"
+mkdir -p "$TMP_DIR"
+STAMP="$(date +%Y%m%d_%H%M%S)"
+BEFORE_JSON="$TMP_DIR/${STAMP}_before_run_summary.json"
+AFTER_JSON="$TMP_DIR/${STAMP}_after_run_summary.json"
+
+capture_counts "$BEFORE_JSON"
+
 maybe_step1() {
+  local meta_path="data/01_parse_meta.json"
   if [[ -n "$SKIP_STEP1" ]]; then
     info "Step 01: skipped because SKIP_STEP1 is set."
     return
@@ -57,6 +134,7 @@ maybe_step1() {
       --mode local
       --files "${FILE_ARR[@]}"
       --out data/01_overheid_results.csv
+      --meta-out "$meta_path"
     )
     if [[ -n "$REFRESH_ALL" ]]; then
       cmd+=(--refresh-all)
@@ -66,19 +144,65 @@ maybe_step1() {
     if [[ -z "$API_QUERY" ]]; then
       die "MODE=api requires API_QUERY='...'"
     fi
-    info "Step 01: parse overheid pages (API)"
-    cmd=(
-      "$PYTHON" scripts/01_parse_overheid_pages.py
-      --mode api
-      --api-query "$API_QUERY"
-      --api-max-records "$API_MAX"
-      --api-timeout "$API_TIMEOUT"
-      --out data/01_overheid_results.csv
-    )
-    if [[ -n "$REFRESH_ALL" ]]; then
-      cmd+=(--refresh-all)
-    fi
-    "${cmd[@]}"
+    local continue_fetch="y"
+    local start_record=1
+    while [[ "$continue_fetch" == "y" ]]; do
+      info "Step 01: parse overheid pages (API)"
+      cmd=(
+        "$PYTHON" scripts/01_parse_overheid_pages.py
+        --mode api
+        --api-query "$API_QUERY"
+        --api-start-record "$start_record"
+        --api-max-records "$API_MAX"
+        --api-timeout "$API_TIMEOUT"
+        --out data/01_overheid_results.csv
+        --meta-out "$meta_path"
+      )
+      if [[ -n "$REFRESH_ALL" && "$start_record" == "1" ]]; then
+        cmd+=(--refresh-all)
+      fi
+      "${cmd[@]}"
+
+      local prompt
+      prompt="$("$PYTHON" - "$meta_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+meta = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+fetched = int(meta.get("fetched_rows", 0))
+available = int(meta.get("api_total_available", 0))
+cap = int(meta.get("api_max_records", 0))
+start = int(meta.get("api_start_record", 1))
+more = bool(meta.get("more_available", False))
+next_start = start + fetched
+accepted_total = 0
+out_path = Path(meta.get("out_path", ""))
+if out_path.exists():
+    import pandas as pd
+    df = pd.read_csv(out_path, dtype=str, keep_default_na=False)
+    accepted_total = len(df)
+if more and cap > 0 and fetched >= cap:
+    print(f"FETCH_MORE {fetched} {available} {cap} {next_start} {accepted_total}")
+PY
+)"
+      if [[ "$prompt" == FETCH_MORE\ * ]]; then
+        read -r _ fetched available cap next_start accepted_total <<< "$prompt"
+        if [[ -t 0 ]]; then
+          printf "[info] Step 01 has processed a page of %s raw API hits out of %s total raw API hits; accepted scraper rows so far: %s.\n" "$fetched" "$available" "$accepted_total"
+          read -r -p "Fetch the next page of up to ${cap} raw API hits? [y/N] " answer
+          case "${answer:-n}" in
+            y|Y|yes|YES)
+              start_record="$next_start"
+              continue
+              ;;
+          esac
+        else
+          printf "[warn] Step 01 reached the page cap after %s raw API hits; total raw API hits available: %s; accepted scraper rows so far: %s. Re-run interactively to fetch more pages.\n" "$fetched" "$available" "$accepted_total"
+        fi
+      fi
+      continue_fetch="n"
+    done
   else
     die "Unknown MODE=$MODE (use 'local' or 'api')."
   fi
@@ -119,54 +243,18 @@ info "Step 06: aggregate participants"
   --output data/06_deelnemers_lbv_lbvplus.csv
 
 info "Step 06b: rebuild province-stage overview"
-"$PYTHON" - <<'PY'
-import pandas as pd
-from datetime import datetime, timedelta
+"$PYTHON" scripts/06b_build_province_stage_overview.py
 
-infile = "data/06_deelnemers_lbv_lbvplus.csv"
-report_date = datetime.now().date()
-cutoff = report_date - timedelta(days=42)
-
-raw = pd.read_csv(infile)
-stage = raw["stage_latest_manual"].fillna("")
-stage = stage.replace("", pd.NA)
-stage = stage.combine_first(raw["stage_latest_llm"])
-raw["stage_effective"] = stage
-
-farm_latest = raw[["farm_id", "Instantie_latest", "stage_effective", "Datum_latest"]].drop_duplicates(subset=["farm_id"]).copy()
-farm_latest["Datum_latest"] = pd.to_datetime(farm_latest["Datum_latest"], errors="coerce")
-
-rows = []
-for prov in sorted(farm_latest["Instantie_latest"].unique()):
-    subset = farm_latest[farm_latest["Instantie_latest"] == prov]
-    total = subset["farm_id"].nunique()
-    receipt = subset[subset["stage_effective"] == "receipt_of_application"]["farm_id"].nunique()
-    draft = subset[subset["stage_effective"] == "draft_decision"]["farm_id"].nunique()
-    definitive = subset[subset["stage_effective"] == "definitive_decision"]["farm_id"].nunique()
-    irrevocable = subset[
-        (subset["stage_effective"] == "definitive_decision")
-        & (subset["Datum_latest"] <= pd.Timestamp(cutoff))
-    ]["farm_id"].nunique()
-    rows.append(
-        {
-            "province": prov,
-            "total_farms": total,
-            "receipt_of_application": receipt,
-            "draft_decision": draft,
-            "definitive_decision": definitive,
-            f"irrevocable_on_{report_date.strftime('%Y_%m_%d')}": irrevocable,
-        }
-    )
-
-df_out = pd.DataFrame(rows)
-df_out.to_csv("data/06b_province_stage_overview.csv", index=False)
-print(f"[info] Wrote data/06b_province_stage_overview.csv ({len(df_out)} rows).")
-PY
+info "Step 08: classify LBV vs LBV+"
+"$PYTHON" scripts/08_classify_lbv_scheme.py
 
 info "Step 07: sync participants to matching pipelines"
 DEST_DIR_FTM="$REPO_ROOT/pipelines/matching_ftm/data/raw"
 mkdir -p "$DEST_DIR_FTM"
 cp data/06_deelnemers_lbv_lbvplus.csv "$DEST_DIR_FTM/06_deelnemers_lbv_lbvplus.csv"
 info "Synced to $DEST_DIR_FTM/06_deelnemers_lbv_lbvplus.csv for downstream matching pipeline"
+
+capture_counts "$AFTER_JSON"
+print_counts_summary "$BEFORE_JSON" "$AFTER_JSON"
 
 info "Pipeline complete"

@@ -1,6 +1,21 @@
 Data layout and retention
 
 - Current canonical outputs live directly in `data/`. Copy the latest blessed run outputs here after verifying.
+- Canonical participants outputs are:
+  - `01_overheid_results.csv`
+  - `02_lbv_enriched.csv`
+  - `03_lbv_enriched_with_pdf.csv`
+  - `04_lbv_enriched_with_ai_summary.csv`
+  - `05_lbv_enriched_addresses.csv`
+  - `06_deelnemers_lbv_lbvplus.csv`
+  - `06_all_unique_farms_review.csv`
+  - `06b_province_stage_overview.csv`
+  - `08_notice_scheme_classification.csv`
+  - `08_farm_scheme_classification.csv`
+- Ad hoc review extracts should not accumulate in `data/`; regenerate them from `06_deelnemers_lbv_lbvplus.csv` with `scripts/07_export_review_csv.py` or move them to `data/archive/`.
+- `data/reference/` holds static helper inputs that are not active pipeline outputs.
+- `data/diagnostics/` holds optional debug outputs such as PDOK corrections/failures, one-off scrape diffs, and `04_address_mismatches.csv` for title-vs-LLM address disagreements.
+- `data/snapshots/` holds dated or pre-cleanup backups such as old `06_deelnemers_lbv_lbvplus` snapshots.
 - Older outputs can move to `data/archive/<date>/` for provenance if you need to keep them; delete stale archives once the latest run is blessed.
 - Per-run artifacts (full drops, deltas, logs) live in `data/runs/<timestamp>/`. Keep runs only as long as needed for provenance; after blessing outputs, delete stale run folders to save space.
 - Legacy `06_vergunningen_lbv_lbvplus.csv` exists only in the archive; step 06 now reads `05_lbv_enriched_addresses.csv` directly.

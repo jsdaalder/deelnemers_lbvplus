@@ -22,10 +22,13 @@ load_dotenv(REPO_ROOT / ".env")
 # =========================
 
 DATA_DIR = PIPE_ROOT / "data"
+EXPERIMENT_ROOT = PIPE_ROOT / "experiments" / "llm_improvement_testing"
 
 IN_PATH = DATA_DIR / "03_lbv_enriched_with_pdf.csv"
 OUT_DIR = DATA_DIR
 BASENAME_CSV = "04_lbv_enriched_with_ai_summary"
+DEFAULT_MANUAL_STAGE_PATH = EXPERIMENT_ROOT / "manual_stage_truth.csv"
+DEFAULT_ADDRESS_MISMATCH_PATH = DATA_DIR / "diagnostics" / "04_address_mismatches.csv"
 
 DEFAULT_MODEL = "gpt-4.1-mini"
 
@@ -66,6 +69,7 @@ ANNOTATION_COLUMNS = [
     COL_COMPANY_NAME,
     COL_COMPANY_ID,
 ]
+COL_STAGE_MANUAL = "Stage_manual"
 
 # =========================
 # Regex / Prescreen
@@ -229,6 +233,29 @@ Geef uitsluitend een JSON-object met exact deze structuur:
 
 
 # =========================
+# CSV / normalization helpers
+# =========================
+
+MISSING_TOKENS = {"", "nan", "none", "null", "nat"}
+
+
+def read_csv_str(path: Path) -> pd.DataFrame:
+    return pd.read_csv(path, dtype=str, keep_default_na=False)
+
+
+def clean_string(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+    elif pd.isna(value):
+        return ""
+    else:
+        text = str(value).strip()
+    return "" if text.lower() in MISSING_TOKENS else text
+
+
+# =========================
 # CLI helpers
 # =========================
 
@@ -289,6 +316,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Alias voor --limit voor achterwaartse compatibiliteit.",
     )
+    parser.add_argument(
+        "--manual-stage-truth",
+        dest="manual_stage_truth",
+        default=str(DEFAULT_MANUAL_STAGE_PATH),
+        help="CSV with manual stage labels keyed by URL_BEKENDMAKING.",
+    )
     return parser.parse_args()
 
 
@@ -301,13 +334,13 @@ def resolve_output_path(user_value: Optional[str], basename: str, ext: str) -> P
 def load_existing_annotations(path: Optional[Path]) -> Dict[str, Dict[str, Any]]:
     if not path or not path.exists():
         return {}
-    df_prev = pd.read_csv(path)
+    df_prev = read_csv_str(path)
     df_prev = ensure_columns(df_prev)
     df_prev = ensure_company_id(df_prev)
     mapping: Dict[str, Dict[str, Any]] = {}
     for _, row in df_prev.iterrows():
-        doc_id = str(row.get("doc_id", "")).strip()
-        alt_doc = str(row.get("doc_id_old_style", "")).strip()
+        doc_id = clean_string(row.get("doc_id", ""))
+        alt_doc = clean_string(row.get("doc_id_old_style", ""))
         keys = []
         if doc_id:
             keys.append(doc_id)
@@ -323,12 +356,34 @@ def load_existing_annotations(path: Optional[Path]) -> Dict[str, Dict[str, Any]]
     return mapping
 
 
+def load_manual_stage_truth(path: Optional[Path]) -> Dict[str, Dict[str, str]]:
+    if not path or not path.exists():
+        return {}
+    df_manual = read_csv_str(path)
+    if "URL_BEKENDMAKING" not in df_manual.columns or COL_STAGE_MANUAL not in df_manual.columns:
+        return {}
+    mapping: Dict[str, Dict[str, str]] = {}
+    for _, row in df_manual.iterrows():
+        url = clean_string(row.get("URL_BEKENDMAKING", ""))
+        stage_manual = clean_string(row.get(COL_STAGE_MANUAL, ""))
+        if not url or not stage_manual:
+            continue
+        mapping[url] = {
+            COL_STAGE_MANUAL: stage_manual,
+            "AddressKey": clean_string(row.get("AddressKey", "")),
+        }
+    if mapping:
+        print(f"[info] Loaded manual stage truth from {path} ({len(mapping)} URLs).")
+    return mapping
+
+
 def apply_existing_annotations(df: pd.DataFrame, mapping: Dict[str, Dict[str, Any]]) -> pd.DataFrame:
     if not mapping or "doc_id" not in df.columns:
         return df
+    float_columns = {COL_LBV_CONF, COL_ADDR_CONF}
     for idx, row in df.iterrows():
-        doc_id = str(row.get("doc_id", "")).strip()
-        alt_doc = str(row.get("doc_id_old_style", "")).strip() if "doc_id_old_style" in df.columns else ""
+        doc_id = clean_string(row.get("doc_id", ""))
+        alt_doc = clean_string(row.get("doc_id_old_style", "")) if "doc_id_old_style" in df.columns else ""
         prev = None
         if doc_id and doc_id in mapping:
             prev = mapping[doc_id]
@@ -338,7 +393,65 @@ def apply_existing_annotations(df: pd.DataFrame, mapping: Dict[str, Dict[str, An
             continue
         for col in ANNOTATION_COLUMNS:
             if col in df.columns and col in prev:
-                df.at[idx, col] = prev.get(col, df.at[idx, col])
+                value = prev.get(col, df.at[idx, col])
+                if col in float_columns:
+                    try:
+                        value = float(value) if clean_string(value) != "" else 0.0
+                    except (TypeError, ValueError):
+                        value = 0.0
+                df.at[idx, col] = value
+    return df
+
+
+def parse_address_key(address_key: str) -> Dict[str, str]:
+    parts = clean_string(address_key).split("|")
+    while len(parts) < 5:
+        parts.append("")
+    street, number, suffix, postcode, place = parts[:5]
+    return {
+        "street": title_case_street(street),
+        "house_number": clean_string(number),
+        "house_number_suffix": clean_string(suffix),
+        "postcode": normalize_postcode_value(postcode),
+        "place": title_case_place(place),
+        "confidence": 0.8 if street and number and place else 0.0,
+    }
+
+
+def apply_manual_stage_truth(df: pd.DataFrame, mapping: Dict[str, Dict[str, str]]) -> pd.DataFrame:
+    if not mapping:
+        return df
+    if COL_STAGE_MANUAL not in df.columns:
+        df[COL_STAGE_MANUAL] = ""
+    for idx, row in df.iterrows():
+        url = clean_string(row.get("URL_BEKENDMAKING", "")) or clean_string(row.get("URL", ""))
+        manual = mapping.get(url)
+        if not manual:
+            continue
+        manual_stage = clean_string(manual.get(COL_STAGE_MANUAL, ""))
+        if not manual_stage:
+            continue
+        df.at[idx, COL_STAGE_MANUAL] = manual_stage
+        if not clean_string(df.at[idx, COL_COMPANY_NAME]) and row_is_noord_brabant(row):
+            company_guess = extract_company_name(row.get("TEXT_HTML", "")) or extract_company_name(combine_text_fields(row.get("TEXT_HTML", ""), row.get("TEXT_PDF", "")))
+            if company_guess:
+                df.at[idx, COL_COMPANY_NAME] = company_guess
+        has_address = all(
+            clean_string(df.at[idx, col]) for col in (COL_ADDR_STREET, COL_ADDR_NR, COL_ADDR_PLACE)
+        )
+        if not has_address:
+            addr = extract_address_from_title(row.get("Titel", "")) or parse_address_key(manual.get("AddressKey", ""))
+            if addr:
+                df.at[idx, COL_ADDR_STREET] = addr.get("street", "") or ""
+                df.at[idx, COL_ADDR_NR] = addr.get("house_number", "") or ""
+                df.at[idx, COL_ADDR_TOEV] = addr.get("house_number_suffix", "") or ""
+                if not clean_string(df.at[idx, COL_ADDR_PC]):
+                    df.at[idx, COL_ADDR_PC] = addr.get("postcode", "") or ""
+                df.at[idx, COL_ADDR_PLACE] = addr.get("place", "") or ""
+                try:
+                    df.at[idx, COL_ADDR_CONF] = float(addr.get("confidence", 0.0) or 0.0)
+                except Exception:
+                    pass
     return df
 
 
@@ -376,11 +489,190 @@ def create_client() -> Optional[OpenAI]:
 
 
 def normalize_text_field(val: Any) -> str:
-    if isinstance(val, str):
-        return val
-    if pd.isna(val):
-        return ""
-    return str(val)
+    return clean_string(val)
+
+
+def normalize_compare_text(value: str) -> str:
+    value = normalize_text_field(value).lower()
+    return re.sub(r"\s+", " ", value).strip()
+
+
+TITLE_ADDRESS_PATTERNS = [
+    re.compile(
+        r"(?:^|,\s*|[-–]\s*)(?P<street>[A-Za-zÀ-ÿ0-9'’.\-/ ]+?)\s+"
+        r"(?P<number>\d+[A-Za-z]?(?:\s*(?:[-/]|en)\s*\d+[A-Za-z]?)*)"
+        r"\s*,\s*(?P<place>[A-Za-zÀ-ÿ'’.\- ]+)$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:^|,\s*|[-–]\s*)(?P<street>[A-Za-zÀ-ÿ0-9'’.\-/ ]+?)\s+"
+        r"(?P<number>\d+[A-Za-z]?(?:\s*(?:[-/]|en)\s*\d+[A-Za-z]?)*)"
+        r"\s*,\s*(?P<postcode>\d{4}\s*[A-Za-z]{2})\s+"
+        r"(?:(?:te|in)\s+)?(?P<place>[A-Za-zÀ-ÿ'’.\- ]+?)(?:$|,\s*Z|\(|,)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:^|,\s*|[-–]\s*)(?P<street>[A-Za-zÀ-ÿ0-9'’.\-/ ]+?)\s+"
+        r"(?P<number>\d+[A-Za-z]?(?:\s*(?:[-/]|en)\s*\d+[A-Za-z]?)*)"
+        r"(?:\s*,\s*(?P<postcode>\d{4}\s*[A-Za-z]{2}))?\s+"
+        r"(?:te|in)\s+(?P<place>[A-Za-zÀ-ÿ'’.\- ]+?)(?:$|[,(])",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\blocatie\s+(?P<street>[A-Za-zÀ-ÿ0-9'’.\-/ ]+?)\s+"
+        r"(?P<number>\d+[A-Za-z]?(?:\s*(?:[-/]|en)\s*\d+[A-Za-z]?)*)"
+        r"(?:\s*,\s*(?P<postcode>\d{4}\s*[A-Za-z]{2}))?"
+        r"(?:\s+(?:te|in)\s+(?P<place>[A-Za-zÀ-ÿ'’.\- ]+)|\s+(?P<place_no_sep>[A-Za-zÀ-ÿ'’.\- ]+))?",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:^|,\s*|[-–]\s*)(?P<street>[A-Za-zÀ-ÿ0-9'’.\-/ ]+?)\s+"
+        r"(?P<number>\d+[A-Za-z]?(?:\s*,\s*\d+[A-Za-z]?)*(?:\s+en\s+\d+[A-Za-z]?)?)"
+        r"(?:\s*,\s*(?P<postcode>\d{4}\s*[A-Za-z]{2}))?"
+        r"\s+(?P<place>[A-Za-zÀ-ÿ'’.\- ]+)$",
+        re.IGNORECASE,
+    ),
+]
+
+TITLE_ADDRESS_HINTS = {
+    "knoevenoordstraat": {"place": "Brummen"},
+    "wapenvelder kerkweg": {"place": "Wapenveld", "postcode": "8191 KL"},
+}
+
+
+def normalize_street_candidate(value: str) -> str:
+    text = normalize_text_field(value)
+    text = re.sub(r"^locatie\s+", "", text, flags=re.IGNORECASE)
+    text = re.split(r"\s+[–-]\s+", text)[-1]
+    text = text.split(",")[-1]
+    text = re.sub(r"\s+", " ", text).strip(" ,.-")
+    return title_case_street(text)
+
+
+def title_case_street(value: str) -> str:
+    parts = [part for part in normalize_text_field(value).split() if part]
+    return " ".join(part[:1].upper() + part[1:] for part in parts)
+
+
+def title_case_place(value: str) -> str:
+    return title_case_street(value)
+
+
+def normalize_postcode_value(value: str) -> str:
+    text = re.sub(r"\s+", "", normalize_text_field(value)).upper()
+    if re.fullmatch(r"\d{4}[A-Z]{2}", text):
+        return f"{text[:4]} {text[4:]}"
+    return ""
+
+
+def split_house_number(value: str) -> Tuple[str, str]:
+    text = normalize_text_field(value)
+    text = re.sub(r"\s+en\s+ongenummerd\b", "", text, flags=re.IGNORECASE).strip(" ,")
+    match = re.fullmatch(r"(\d+)([A-Za-z]{1,4})", text)
+    if match:
+        return match.group(1), match.group(2)
+    return text, ""
+
+
+def extract_address_from_title(title: str) -> Dict[str, str]:
+    source = normalize_text_field(title)
+    if not source:
+        return {}
+    compact = re.sub(r"\s+", " ", source).strip(" ,")
+    compact = re.sub(r"\s+en\s+ongenummerd\b", "", compact, flags=re.IGNORECASE).strip(" ,")
+    for pattern in TITLE_ADDRESS_PATTERNS:
+        match = pattern.search(compact)
+        if not match:
+            continue
+        street = normalize_street_candidate(match.group("street"))
+        number, suffix = split_house_number(match.group("number"))
+        postcode = normalize_postcode_value(match.groupdict().get("postcode", "") or "")
+        place = title_case_place(
+            match.groupdict().get("place", "")
+            or match.groupdict().get("place_no_sep", "")
+            or ""
+        )
+        hint = TITLE_ADDRESS_HINTS.get(normalize_compare_text(street), {})
+        if not place:
+            place = hint.get("place", "")
+        if not postcode:
+            postcode = hint.get("postcode", "")
+        if street and number and place:
+            return {
+                "street": street,
+                "house_number": number,
+                "house_number_suffix": suffix,
+                "postcode": postcode,
+                "place": place,
+                "confidence": 0.95,
+            }
+    return {}
+
+
+def address_looks_present(address: Dict[str, Any], text: str) -> bool:
+    street = normalize_compare_text(address.get("street", ""))
+    number = normalize_compare_text(address.get("house_number", ""))
+    place = normalize_compare_text(address.get("place", ""))
+    haystack = normalize_compare_text(text)
+    if not (street and number and place and haystack):
+        return False
+    return street in haystack and number in haystack and place in haystack
+
+
+def choose_address(row: pd.Series, llm_address: Dict[str, Any], combined_text: str) -> Dict[str, Any]:
+    title_address = extract_address_from_title(row.get("Titel", ""))
+    if not title_address:
+        return llm_address
+    if not llm_address:
+        return title_address
+    llm_has_core = all(clean_string(llm_address.get(key, "")) for key in ("street", "house_number", "place"))
+    llm_in_title = address_looks_present(llm_address, row.get("Titel", ""))
+    llm_in_text = address_looks_present(llm_address, combined_text)
+    title_in_title = address_looks_present(title_address, row.get("Titel", ""))
+    if title_in_title and (not llm_has_core or not (llm_in_title or llm_in_text)):
+        return title_address
+    return llm_address
+
+
+def addresses_materially_differ(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    if not a or not b:
+        return False
+    a_core = tuple(normalize_compare_text(a.get(k, "")) for k in ("street", "house_number", "place"))
+    b_core = tuple(normalize_compare_text(b.get(k, "")) for k in ("street", "house_number", "place"))
+    if not all(a_core) or not all(b_core):
+        return False
+    return a_core != b_core
+
+
+def build_address_mismatch_row(
+    row: pd.Series,
+    llm_address: Dict[str, Any],
+    title_address: Dict[str, Any],
+    chosen_address: Dict[str, Any],
+) -> Dict[str, str]:
+    return {
+        "doc_id": clean_string(row.get("doc_id", "")),
+        "Titel": clean_string(row.get("Titel", "")),
+        "Datum": clean_string(row.get("Datum", "")),
+        "URL_BEKENDMAKING": clean_string(row.get("URL_BEKENDMAKING", "")),
+        "STAGE": clean_string(row.get(COL_STAGE, "")),
+        "Stage_manual": clean_string(row.get(COL_STAGE_MANUAL, "")),
+        "llm_street": clean_string(llm_address.get("street", "")),
+        "llm_house_number": clean_string(llm_address.get("house_number", "")),
+        "llm_house_number_suffix": clean_string(llm_address.get("house_number_suffix", "")),
+        "llm_postcode": clean_string(llm_address.get("postcode", "")),
+        "llm_place": clean_string(llm_address.get("place", "")),
+        "title_street": clean_string(title_address.get("street", "")),
+        "title_house_number": clean_string(title_address.get("house_number", "")),
+        "title_house_number_suffix": clean_string(title_address.get("house_number_suffix", "")),
+        "title_postcode": clean_string(title_address.get("postcode", "")),
+        "title_place": clean_string(title_address.get("place", "")),
+        "chosen_street": clean_string(chosen_address.get("street", "")),
+        "chosen_house_number": clean_string(chosen_address.get("house_number", "")),
+        "chosen_house_number_suffix": clean_string(chosen_address.get("house_number_suffix", "")),
+        "chosen_postcode": clean_string(chosen_address.get("postcode", "")),
+        "chosen_place": clean_string(chosen_address.get("place", "")),
+    }
 
 
 def has_current_ontwerpbesluit(text: str) -> bool:
@@ -421,13 +713,15 @@ def has_current_ontwerpbesluit_any(text: str) -> bool:
 
 
 def has_definitive_after_ontwerp(text: str) -> bool:
-    """True when text explicitly states the definitive decision changed vs ontwerpbesluit."""
+    """True when text explicitly states the definitive decision changed vs draft."""
     if not text:
         return False
     cleaned = re.sub(r"\s+", " ", text.lower())
     patterns = [
         r"besluit.{0,120}(?:ten opzichte van|t\.o\.v\.).{0,80}ontwerpbesluit.{0,80}gewijzigd",
         r"besluit.{0,120}gewijzigd.{0,120}ontwerpbesluit",
+        r"beschikking.{0,120}(?:ten opzichte van|t\.o\.v\.).{0,80}ontwerpbeschikking.{0,80}gewijzigd",
+        r"beschikking.{0,120}gewijzigd.{0,120}ontwerpbeschikking",
     ]
     return any(re.search(pat, cleaned) for pat in patterns)
 
@@ -638,7 +932,7 @@ def ensure_company_id(df: pd.DataFrame) -> pd.DataFrame:
     def addr_key(row) -> str:
         parts = []
         for col in (COL_ADDR_STREET, COL_ADDR_NR, COL_ADDR_TOEV, COL_ADDR_PC, COL_ADDR_PLACE):
-            val = str(row[col]).strip().lower() if col in df.columns and pd.notna(row[col]) else ""
+            val = clean_string(row[col]).lower() if col in df.columns else ""
             parts.append(val)
         key = "|".join(parts)
         return key if key.strip("|") else ""
@@ -677,6 +971,8 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     ]:
         if col not in df.columns:
             df[col] = default
+        else:
+            df[col] = df[col].apply(clean_string)
 
     # Address
     for col, default in [
@@ -694,7 +990,11 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     if COL_COMPANY_NAME not in df.columns:
         df[COL_COMPANY_NAME] = ""
     else:
-        df[COL_COMPANY_NAME] = df[COL_COMPANY_NAME].fillna("").astype(str)
+        df[COL_COMPANY_NAME] = df[COL_COMPANY_NAME].apply(clean_string)
+    if COL_STAGE_MANUAL not in df.columns:
+        df[COL_STAGE_MANUAL] = ""
+    else:
+        df[COL_STAGE_MANUAL] = df[COL_STAGE_MANUAL].apply(clean_string)
     return df
 
 
@@ -813,7 +1113,7 @@ def main():
     if not input_path.exists():
         raise FileNotFoundError(f"Invoerbestand niet gevonden: {input_path}")
 
-    df = pd.read_csv(input_path)
+    df = read_csv_str(input_path)
     df = ensure_columns(df)
     df = ensure_company_id(df)
 
@@ -824,6 +1124,9 @@ def main():
             existing_path = candidate
     existing_map = load_existing_annotations(existing_path)
     df = apply_existing_annotations(df, existing_map)
+    manual_stage_path = Path(args.manual_stage_truth).expanduser().resolve() if args.manual_stage_truth else None
+    manual_stage_map = load_manual_stage_truth(manual_stage_path)
+    df = apply_manual_stage_truth(df, manual_stage_map)
     incremental = bool(existing_map) and not args.full_run
 
     total_rows = len(df)
@@ -864,6 +1167,7 @@ def main():
         indices = [i for i in indices if not _clean(df.at[i, COL_LBV_TYPE])]
     elif not args.force:
         indices = [i for i in indices if not _clean(df.at[i, COL_AI_SOURCE])]
+    indices = [i for i in indices if not _clean(df.at[i, COL_STAGE_MANUAL])]
 
     if not indices:
         print("[info] Geen rijen om te verwerken onder de huidige instellingen.")
@@ -881,6 +1185,7 @@ def main():
 
     start_all = time.time()
     llm_calls = 0
+    address_mismatches: list[Dict[str, str]] = []
 
     for idx_pos, idx in enumerate(indices, start=1):
         row_start = time.time()
@@ -957,7 +1262,13 @@ def main():
                     df.at[idx, COL_LBV_CONF] = 0.0
 
                 # address from llm
-                addr = data.get("address", {}) or {}
+                llm_addr = data.get("address", {}) or {}
+                title_addr = extract_address_from_title(df.loc[idx].get("Titel", ""))
+                addr = choose_address(df.loc[idx], llm_addr, combined_text)
+                if addresses_materially_differ(llm_addr, title_addr):
+                    address_mismatches.append(
+                        build_address_mismatch_row(df.loc[idx], llm_addr, title_addr, addr)
+                    )
                 df.at[idx, COL_ADDR_STREET] = addr.get("street", "") or ""
                 df.at[idx, COL_ADDR_NR] = addr.get("house_number", "") or ""
                 df.at[idx, COL_ADDR_TOEV] = addr.get("house_number_suffix", "") or ""
@@ -1024,6 +1335,13 @@ def main():
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_csv, index=False, encoding="utf-8")
     print(f"[ok] Geschreven CSV : {out_csv}")
+    mismatch_path = DEFAULT_ADDRESS_MISMATCH_PATH
+    mismatch_path.parent.mkdir(parents=True, exist_ok=True)
+    if address_mismatches:
+        pd.DataFrame(address_mismatches).drop_duplicates().to_csv(mismatch_path, index=False, encoding="utf-8")
+        print(f"[info] Wrote address mismatches: {mismatch_path} ({len(address_mismatches)} rows before dedupe)")
+    elif mismatch_path.exists():
+        mismatch_path.unlink()
 
 
 if __name__ == "__main__":

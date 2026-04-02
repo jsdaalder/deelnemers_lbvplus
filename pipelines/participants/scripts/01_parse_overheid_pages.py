@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import json
 import re
 from datetime import datetime
 from html import unescape
@@ -286,10 +287,11 @@ def parse_api_record(record: ET.Element) -> Optional[Dict[str, str]]:
 
 def fetch_api_rows(
     endpoint: str, query: str, start: int, limit: int, chunk: int, timeout: int
-) -> List[Dict[str, str]]:
+) -> tuple[List[Dict[str, str]], int]:
     session = requests.Session()
     rows: List[Dict[str, str]] = []
     next_start = max(1, start)
+    total_available = 0
 
     while len(rows) < limit:
         remaining = limit - len(rows)
@@ -313,6 +315,12 @@ def fetch_api_rows(
         except ET.ParseError as exc:
             raise SystemExit(f"[error] Failed to parse API response: {exc}") from exc
 
+        total_text = root.findtext(".//sru:numberOfRecords", namespaces=NS, default="0")
+        try:
+            total_available = max(total_available, int(total_text))
+        except ValueError:
+            pass
+
         record_nodes = root.findall(".//sru:record", NS)
         if not record_nodes:
             break
@@ -334,7 +342,7 @@ def fetch_api_rows(
         if next_start <= 0:
             break
 
-    return rows
+    return rows, total_available
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
@@ -390,6 +398,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Overschrijf bestaande output en haal alle resultaten opnieuw op in plaats van alleen nieuwe toevoegingen.",
     )
+    ap.add_argument(
+        "--meta-out",
+        default="",
+        help="Optional JSON sidecar with fetch metadata (total available, fetched count, cap reached).",
+    )
     return ap.parse_args()
 
 
@@ -426,7 +439,7 @@ def collect_rows(args: argparse.Namespace) -> List[Dict[str, str]]:
         f"[info] API mode: endpoint={args.api_endpoint} query='{args.api_query}' "
         f"(max {args.api_max_records}, chunk {args.api_chunk_size})"
     )
-    return fetch_api_rows(
+    rows, total_available = fetch_api_rows(
         endpoint=args.api_endpoint,
         query=args.api_query,
         start=args.api_start_record,
@@ -434,6 +447,37 @@ def collect_rows(args: argparse.Namespace) -> List[Dict[str, str]]:
         chunk=args.api_chunk_size,
         timeout=args.api_timeout,
     )
+    args._api_total_available = total_available
+    return rows
+
+
+def write_meta(args: argparse.Namespace, out_path: Path, fetched_rows: int, new_rows: int) -> None:
+    if not args.meta_out:
+        return
+    meta_path = Path(args.meta_out).expanduser().resolve()
+    total_available = int(getattr(args, "_api_total_available", 0) or 0)
+    start = int(args.api_start_record) if args.mode == "api" else 1
+    requested_limit = int(args.api_max_records) if args.mode == "api" else fetched_rows
+    reached_cap = bool(args.mode == "api" and fetched_rows >= requested_limit)
+    more_available = bool(
+        args.mode == "api"
+        and total_available > 0
+        and (start - 1 + fetched_rows) < total_available
+    )
+    payload = {
+        "mode": args.mode,
+        "out_path": str(out_path),
+        "fetched_rows": fetched_rows,
+        "new_rows": new_rows,
+        "api_total_available": total_available,
+        "api_start_record": start,
+        "api_max_records": requested_limit,
+        "api_chunk_size": int(args.api_chunk_size) if args.mode == "api" else 0,
+        "reached_cap": reached_cap,
+        "more_available": more_available,
+    }
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def log_run(args: argparse.Namespace, out_path: Path, total_rows: int, new_rows: int) -> None:
@@ -480,7 +524,7 @@ def main():
         if existing_rows:
             print(f"[info] Loaded {len(existing_rows)} bestaande regels uit {out_path}")
 
-    if args.mode == "api" and latest_iso and not args.refresh_all:
+    if args.mode == "api" and latest_iso and not args.refresh_all and int(args.api_start_record) <= 1:
         args.api_query = augment_query_with_since(args.api_query, latest_iso)
         print(
             f"[info] Alleen nieuwe resultaten ophalen vanaf {latest_iso}. Gebruik --refresh-all om alles opnieuw op te halen."
@@ -535,7 +579,15 @@ def main():
         for r in deduped:
             w.writerow(r)
 
+    fetched_count = len(ensured_rows)
+    total_available = int(getattr(args, "_api_total_available", 0) or 0)
+    if args.mode == "api" and total_available:
+        print(
+            f"[info] API page fetched {fetched_count} raw search hits out of {total_available} total raw API hits "
+            f"(cap {args.api_max_records}); accepted new scraper records this page: {len(new_rows)}."
+        )
     print(f"Wrote {len(deduped)} rows → {out_path} (nieuwe records: {len(new_rows)})")
+    write_meta(args, out_path, fetched_count, len(new_rows))
     log_run(args, out_path, len(deduped), len(new_rows))
 
 if __name__ == "__main__":

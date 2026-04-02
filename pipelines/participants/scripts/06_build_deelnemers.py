@@ -109,6 +109,10 @@ def main():
 
     # ---------- 4. Map doc_ids to farm_ids ----------
     roots = sorted({uf.find(d) for d in df["doc_id"].unique()})
+    root_doc_ids = {
+        root: sorted([doc_id for doc_id in df["doc_id"].unique() if uf.find(doc_id) == root])
+        for root in roots
+    }
     root_to_farm_id = {
         root: f"FARM{str(i + 1).zfill(4)}" for i, root in enumerate(roots)
     }
@@ -126,8 +130,30 @@ def main():
                 existing_map[doc_id] = farm_id_new
                 existing_created[doc_id] = created_at
 
+    existing_id_owners = defaultdict(list)
+    for root, doc_ids in root_doc_ids.items():
+        counts = defaultdict(int)
+        for doc_id in doc_ids:
+            farm_id_new = existing_map.get(doc_id, "").strip()
+            if farm_id_new:
+                counts[farm_id_new] += 1
+        for farm_id_new, count in counts.items():
+            existing_id_owners[farm_id_new].append((root, count))
+
+    winning_root_for_existing_id = {}
+    for farm_id_new, owners in existing_id_owners.items():
+        owners_sorted = sorted(owners, key=lambda item: (-item[1], item[0]))
+        winning_root_for_existing_id[farm_id_new] = owners_sorted[0][0]
+
     def _stable_farm_id(doc_ids: list[str]) -> str:
-        existing_ids = sorted({existing_map[doc_id] for doc_id in doc_ids if doc_id in existing_map})
+        existing_ids = sorted(
+            {
+                existing_map[doc_id]
+                for doc_id in doc_ids
+                if doc_id in existing_map
+                and winning_root_for_existing_id.get(existing_map[doc_id]) == uf.find(doc_id)
+            }
+        )
         if existing_ids:
             return existing_ids[0]
         seed = sorted(doc_ids)[0]
@@ -135,12 +161,13 @@ def main():
 
     root_to_farm_id_new = {}
     for root in roots:
-        doc_ids = sorted([doc_id for doc_id in df["doc_id"].unique() if uf.find(doc_id) == root])
+        doc_ids = root_doc_ids[root]
         root_to_farm_id_new[root] = _stable_farm_id(doc_ids)
         for doc_id in doc_ids:
-            if doc_id not in existing_map:
-                existing_map[doc_id] = root_to_farm_id_new[root]
-                existing_created[doc_id] = datetime.date.today().isoformat()
+            assigned_id = root_to_farm_id_new[root]
+            if existing_map.get(doc_id) != assigned_id:
+                existing_map[doc_id] = assigned_id
+                existing_created[doc_id] = existing_created.get(doc_id) or datetime.date.today().isoformat()
 
     df["farm_root"] = df["doc_id"].apply(uf.find)
     df["farm_id"] = df["farm_root"].map(root_to_farm_id)

@@ -45,11 +45,10 @@ RANGE_SUFFIX_RE = re.compile(r"^\s*(\d+)([A-Za-z]?)\s*[-–]\s*(\d+)([A-Za-z]?)\
 TM_RE = re.compile(r"^\s*(\d+)\s*t/m\s*(\d+)\s*$", re.IGNORECASE)
 POSTCODE_RE = re.compile(r"^\s*(\d{4})\s*([A-Za-z]{2})\s*$")
 TOKEN_RE = re.compile(r"^(\d+)([A-Za-z]*)$")
+LIST_ITEM_RE = re.compile(r"^\s*(\d+)([A-Za-z]{0,4})\s*$")
 
 PDOK_ENDPOINTS = [
     "https://api.pdok.nl/bzk/locatieserver/search/v3_1/free",
-    "https://service.pdok.nl/bzk/locatieserver/search/v3_1/free",
-    "https://geodata.nationaalgeoregister.nl/locatieserver/v3/free",
 ]
 PDOK_TIMEOUT = 10  # seconds
 PDOK_RETRIES = 3
@@ -68,13 +67,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--pdok-failures",
-        default=str(DATA_DIR / "05_pdok_failures.csv"),
-        help="CSV output for PDOK lookup failures (default: data/05_pdok_failures.csv).",
+        default=str(DATA_DIR / "diagnostics" / "05_pdok_failures.csv"),
+        help="CSV output for PDOK lookup failures (default: data/diagnostics/05_pdok_failures.csv).",
     )
     parser.add_argument(
         "--pdok-corrections",
-        default=str(DATA_DIR / "05_pdok_corrections.csv"),
-        help="CSV output for PDOK postcode corrections (default: data/05_pdok_corrections.csv).",
+        default=str(DATA_DIR / "diagnostics" / "05_pdok_corrections.csv"),
+        help="CSV output for PDOK postcode corrections (default: data/diagnostics/05_pdok_corrections.csv).",
+    )
+    parser.add_argument(
+        "--skip-pdok",
+        action="store_true",
+        help="Skip PDOK postcode lookups and only build deterministic address keys.",
     )
     return parser.parse_args()
 
@@ -110,6 +114,18 @@ def iter_house_numbers(raw: str) -> Iterable[tuple[str, str]]:
     text = (raw or "").strip()
     if not text:
         return []
+    if "," in text and " en " in text.lower():
+        normalized = re.sub(r"\ben\b", ",", text, flags=re.IGNORECASE)
+        parts = [part.strip() for part in normalized.split(",") if part.strip()]
+        parsed = []
+        for part in parts:
+            token_match = LIST_ITEM_RE.match(part)
+            if not token_match:
+                return []
+            num, suf = token_match.groups()
+            parsed.append((num, suf.upper()))
+        if parsed:
+            return parsed
     match = PAIR_RE.match(text)
     if match:
         return [(match.group(1), ""), (match.group(2), "")]
@@ -187,6 +203,12 @@ class PdokClient:
             for attempt in range(1, PDOK_RETRIES + 1):
                 try:
                     resp = requests.get(endpoint, params=params, timeout=PDOK_TIMEOUT, headers=headers)
+                    if resp.status_code == 404:
+                        print(
+                            f"[warn] PDOK endpoint returned 404 via {endpoint} for '{query}'. "
+                            "Skipping retries for this endpoint."
+                        )
+                        break
                     resp.raise_for_status()
                     data = resp.json()
                     docs = data.get("response", {}).get("docs", [])
@@ -317,9 +339,12 @@ def main() -> None:
     df = expand_house_numbers(df)
     failures: List[dict] = []
     corrections: List[dict] = []
-    pdok_client = PdokClient()
-    df = fill_missing_postcodes(df, pdok_client, failures)
-    df = fill_canonical_postcodes(df, pdok_client, corrections)
+    if args.skip_pdok:
+        print("[info] Skipping PDOK lookups; using only addresses already present in step 04.")
+    else:
+        pdok_client = PdokClient()
+        df = fill_missing_postcodes(df, pdok_client, failures)
+        df = fill_canonical_postcodes(df, pdok_client, corrections)
     df[COL_ADDRESS_KEY] = df.apply(build_address_key, axis=1)
     df.to_csv(output_path, index=False)
     if failures:
